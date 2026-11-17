@@ -9,6 +9,7 @@ const ICONS = {
   newNote: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 12v6M9 15h6"/>',
   newFolder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/>',
   folderPath: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8M13 10l3 3-3 3"/>',
+  trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>',
   collapse: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
   openApp: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
@@ -36,6 +37,7 @@ for (const [id, icon] of [
   ['app', 'openApp'],
   ['new-note', 'newNote'],
   ['new-folder', 'newFolder'],
+  ['delete', 'trash'],
   ['collapse', 'collapse'],
   ['change-path', 'folderPath']
 ] as const) $(id).innerHTML = svg(icon)
@@ -114,12 +116,20 @@ function find(items: NoteNode[], key: string): NoteNode | undefined {
 }
 
 function render(): void {
+  // Rebuilding drops the focused row: give focus back to the selection so the arrow keys keep working.
+  const focused = els.tree.contains(document.activeElement)
+  build()
+  if (focused) els.tree.querySelector<HTMLElement>('.row.selected')?.focus()
+}
+
+function build(): void {
   els.tree.replaceChildren()
   if (!data) return
   const items = query ? data.items.map((n) => narrow(n, query)).filter((n): n is NoteNode => n !== null) : data.items
   if (items.length === 0) {
     els.tree.innerHTML = `<li class="empty">${query ? '일치하는 노트가 없습니다' : '노트가 없습니다'}</li>`
   } else for (const n of items) els.tree.append(node(n, 0))
+  $<HTMLButtonElement>('delete').disabled = !selected || selected.endsWith('/') || !find(data.items, selected)
   els.status.textContent = !data.remote ? '로컬' : data.pending.length ? `대기 ${data.pending.length}` : ''
 }
 
@@ -158,8 +168,31 @@ els.tree.addEventListener('click', (e) => {
   const row = (e.target as HTMLElement).closest<HTMLElement>('.row')
   if (row?.dataset.key) void activate(row.dataset.key)
 })
-els.tree.addEventListener('keydown', (e) => {
-  const row = (e.target as HTMLElement).closest<HTMLElement>('.row')
+// On the document, not the tree: with nothing focused (the panel just opened, a dialog closed)
+// the arrows start from the selected row.
+document.addEventListener('keydown', (e) => {
+  const t = e.target as HTMLElement
+  const free = t === document.body || t === document.documentElement
+  const row = t.closest<HTMLElement>('.row') ?? (free ? els.tree.querySelector<HTMLElement>('.row.selected') : null)
+  if ((row || free) && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    e.preventDefault()
+    // Rows inside a collapsed folder are display:none: skip them.
+    const rows = Array.from(els.tree.querySelectorAll<HTMLElement>('.row')).filter((r) => r.offsetParent !== null)
+    const next = row ? rows[rows.indexOf(row) + (e.key === 'ArrowDown' ? 1 : -1)] : rows[0]
+    if (!next?.dataset.key) return
+    row?.classList.remove('selected')
+    next.classList.add('selected')
+    next.focus()
+    next.scrollIntoView({ block: 'nearest' })
+    selected = next.dataset.key
+    $<HTMLButtonElement>('delete').disabled = selected.endsWith('/')
+    saveState()
+  }
+  if (row?.dataset.key && e.key === 'Delete') {
+    selected = row.dataset.key
+    render()
+    startDelete()
+  }
   if (row?.dataset.key && (e.key === 'Enter' || e.key === ' ')) {
     e.preventDefault()
     void activate(row.dataset.key)
@@ -229,6 +262,28 @@ els.create.addEventListener('submit', (e) => {
     if (folder) expanded.add(folder)
     await refresh()
     await activate(path)
+  })
+})
+
+// Delete asks first in a <dialog>: the panel's sandbox may not allow confirm().
+function startDelete(): void {
+  const n = data && find(data.items, selected)
+  if (!n || n.kind === 'folder') return
+  $('confirm-text').textContent = `'${n.label}' 노트를 삭제할까요? (휴지통으로 이동)`
+  const dlg = $<HTMLDialogElement>('confirm')
+  dlg.returnValue = ''
+  dlg.showModal()
+  $('confirm-no').focus()
+}
+$('delete').addEventListener('click', startDelete)
+$('confirm').addEventListener('close', () => {
+  if ($<HTMLDialogElement>('confirm').returnValue !== 'yes') return
+  const path = selected
+  void guard(async () => {
+    await orca.plugin.request('note.delete', { vault, path })
+    selected = ''
+    saveState()
+    await refresh()
   })
 })
 

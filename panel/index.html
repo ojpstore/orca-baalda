@@ -83,6 +83,12 @@
       }
       .error { margin: 0 4px 8px; padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--orca-destructive) 18%, transparent); color: var(--orca-foreground); font-size: 12px; }
       .error[hidden] { display: none; }
+      .confirm { max-width: calc(100vw - 32px); padding: 14px; border: 1px solid var(--orca-border); border-radius: 8px; background: var(--orca-card); color: var(--orca-foreground); }
+      .confirm::backdrop { background: rgb(0 0 0 / 0.4); }
+      .confirm p { margin: 0 0 12px; overflow-wrap: anywhere; }
+      .confirm .actions { display: flex; justify-content: flex-end; gap: 6px; }
+      .confirm button { width: auto; padding: 0 10px; font: inherit; border: 1px solid var(--orca-border); }
+      .confirm .danger { color: var(--orca-destructive); }
       ul { list-style: none; margin: 0; padding: 0; }
       .row {
         display: flex;
@@ -131,6 +137,7 @@
       <span class="status" id="status"></span>
       <button id="new-note" title="새 노트" aria-label="새 노트"></button>
       <button id="new-folder" title="새 폴더" aria-label="새 폴더"></button>
+      <button id="delete" title="선택한 노트 삭제" aria-label="선택한 노트 삭제" disabled></button>
       <button id="collapse" title="모두 접기" aria-label="모두 접기"></button>
     </div>
     <div class="filter">
@@ -139,6 +146,15 @@
     <form class="create" id="create" hidden>
       <input id="name" aria-label="이름" autocomplete="off" />
     </form>
+    <dialog class="confirm" id="confirm">
+      <form method="dialog">
+        <p id="confirm-text"></p>
+        <div class="actions">
+          <button value="no" id="confirm-no">취소</button>
+          <button value="yes" class="danger">삭제</button>
+        </div>
+      </form>
+    </dialog>
     <div class="error" id="error" role="alert" hidden></div>
     <ul id="tree" role="tree" aria-label="노트"></ul>
     <script type="module" src="./main.ts"></script>

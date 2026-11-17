@@ -73,7 +73,33 @@ function show(): void {
   if (!target) view.innerHTML = '<p class="empty">Baalda 패널에서 노트를 선택하세요</p>'
   else if (editing) return
   else if (isPage(target)) page.srcdoc = withSdk(text) // HTML page (dashboard): sandboxed, own origin
-  else view.innerHTML = render(text)
+  else {
+    view.innerHTML = render(text)
+    for (const pre of Array.from(view.querySelectorAll('pre'))) {
+      const b = document.createElement('button')
+      b.className = 'copy'
+      b.textContent = '복사'
+      // Wrapped, so the button stays put while a long line scrolls the pre sideways.
+      const wrap = Object.assign(document.createElement('div'), { className: 'code' })
+      pre.replaceWith(wrap)
+      wrap.append(pre, b)
+    }
+  }
+}
+
+/** The sandboxed tab may be denied the async clipboard: fall back to a selection copy. */
+async function copy(s: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(s)
+    return true
+  } catch {
+    const t = Object.assign(document.createElement('textarea'), { value: s })
+    document.body.append(t)
+    t.select()
+    const ok = document.execCommand('copy')
+    t.remove()
+    return ok
+  }
 }
 
 /**
@@ -120,6 +146,15 @@ function goto(link: string): void {
 
 // Follow note links inside the vault; open web links in the browser.
 view.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button.copy')
+  if (btn) {
+    const code = btn.parentElement?.querySelector('pre')?.textContent ?? ''
+    void copy(code).then((ok) => {
+      btn.textContent = ok ? '복사됨' : '복사 실패'
+      setTimeout(() => (btn.textContent = '복사'), 1500)
+    })
+    return
+  }
   const a = (e.target as HTMLElement).closest('a')
   if (!a) return
   e.preventDefault()
@@ -184,7 +219,7 @@ document.addEventListener('keydown', (e) => {
 
 // The note changed on disk (Baalda sync, another editor): reload unless the user is typing.
 orca.plugin.on('notes.changed', () => {
-  if (target && !dirty && !editing) void load(target)
+  if (target && !dirty && !editing) void load(target).catch(() => (state.textContent = '노트가 삭제되었거나 읽을 수 없습니다'))
 })
 
 const doc = await orca.document!.session<string>()

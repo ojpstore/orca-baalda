@@ -1,6 +1,6 @@
 // Runs the worker over a throwaway vault on disk, with Baalda's config pointed at it.
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as main from './worker'
@@ -65,4 +65,15 @@ test('resolves wikilinks like Baalda: vault path, relative, then by name', async
   assert.equal(await r('Welcome.md', 'home'), 'Dashboards/Home.html') // by name, any folder
   assert.equal(await r('Welcome.md', 'Missing'), null)
   assert.equal(await r('Welcome.md', '../../etc/passwd'), null)
+})
+
+// Its own worker: a delete under notes.tree's vault watcher keeps the test host from exiting.
+test('deletes notes only, to the Recycle Bin on Windows', async () => {
+  const { vault } = fixture()
+  const worker = await mountWorker(main, { host: mockHost() })
+  await worker.request('note.delete', { vault, path: 'Concepts/A.md' })
+  assert.equal(existsSync(join(vault, 'Concepts', 'A.md')), false)
+  await assert.rejects(worker.request('note.delete', { vault, path: 'Concepts/' }))
+  await assert.rejects(worker.request('note.delete', { vault, path: '../config.json' }))
+  await worker.deactivate()
 })

@@ -4,7 +4,7 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import type { NoteNode, Sync, SyncState, Tree, Vault } from './protocol'
 import { execFile } from 'node:child_process'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 
@@ -450,6 +450,18 @@ export default function activate(orca: OrcaWorkerApi): void {
       await writeFile(target, '', { encoding: 'utf8', flag: 'wx' })
     }
     return { path: kind === 'folder' ? rel + '/' : rel }
+  })
+
+  // Recycle Bin, not unlink: Baalda syncs the deletion to the server, so keep a way back.
+  orca.panels.handle('note.delete', async ({ vault, path }) => {
+    const file = docFile(await vaultDir(vault), path)
+    if (process.platform !== 'win32') await rm(file)
+    else
+      await powershell(
+        "Add-Type -AssemblyName Microsoft.VisualBasic\n[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:BAALDA_FILE, 'OnlyErrorDialogs', 'SendToRecycleBin')",
+        { BAALDA_FILE: file }
+      )
+    return { ok: true as const }
   })
 
   /** Bumped by "앱 창 열기": the person took the app over, so a pending auto-close is dropped. */

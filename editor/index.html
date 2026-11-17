@@ -33,7 +33,10 @@
       #view h3 { font-size: 1.15em; margin: 1.2em 0 0.4em; }
       #view a { color: var(--orca-primary); }
       #view code { font-family: ui-monospace, Consolas, monospace; font-size: 0.88em; padding: 0.1em 0.35em; border-radius: 4px; background: var(--orca-muted); }
+      #view .code { position: relative; }
       #view pre { padding: 12px 14px; border-radius: 8px; background: var(--orca-muted); overflow: auto; }
+      #view .code .copy { position: absolute; top: 6px; right: 6px; padding: 2px 8px; border: 1px solid var(--orca-border); border-radius: 5px; background: var(--orca-card); color: var(--orca-muted-foreground); font: 11px system-ui, sans-serif; cursor: pointer; opacity: 0; }
+      #view .code:hover .copy, #view .code .copy:focus-visible { opacity: 1; }
       #view pre code { padding: 0; background: none; }
       #view blockquote { margin: 1em 0; padding: 0 1em; border-left: 3px solid var(--orca-border); color: var(--orca-muted-foreground); }
       #view table { border-collapse: collapse; }

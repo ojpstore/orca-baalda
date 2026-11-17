@@ -40,6 +40,8 @@ declare module 'orca' {
       input: { vault: string; folder: string; name: string; kind: 'note' | 'folder' }
       output: { path: string }
     }
+    /** Deletes a note or page: to the Recycle Bin on Windows. Baalda syncs the deletion. */
+    'note.delete': { input: { vault: string; path: string }; output: { ok: true } }
     /** Shows the Baalda desktop app's window (hidden by sync.run), or starts it normally. */
     'app.show': { output: { ok: true } }
     /** Starts the Baalda desktop app (the sync engine) with no window if it is not running. */
