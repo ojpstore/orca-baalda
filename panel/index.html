@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --row-h: 30px;
+        --dot-synced: #4ade80;
+        --dot-pending: #f5b642;
+        --selected-icon: #9b8cff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 10px 8px;
+        font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: var(--orca-foreground);
+        background: var(--orca-background);
+        user-select: none;
+      }
+      button {
+        display: inline-grid;
+        place-items: center;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        background: none;
+        color: var(--orca-muted-foreground);
+        cursor: pointer;
+      }
+      button:hover { background: var(--orca-accent); color: var(--orca-accent-foreground); }
+      button:disabled { opacity: 0.4; cursor: default; }
+      button:focus-visible, select:focus-visible, input:focus-visible, .row:focus-visible {
+        outline: 2px solid var(--orca-ring);
+        outline-offset: -2px;
+      }
+      svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .path { display: flex; align-items: center; gap: 4px; padding: 0 2px 0 4px; margin-bottom: 4px; }
+      .path span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-size: 11px; color: var(--orca-muted-foreground); }
+      .path button { width: 22px; height: 22px; }
+      .path button svg { width: 13px; height: 13px; }
+      .top { display: flex; gap: 4px; align-items: center; margin-bottom: 12px; }
+      select {
+        flex: 1;
+        min-width: 0;
+        height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--orca-input);
+        border-radius: 6px;
+        background: var(--orca-card);
+        color: var(--orca-foreground);
+        font: inherit;
+      }
+      .section { display: flex; align-items: center; gap: 2px; padding: 0 4px 6px; }
+      .section h2 { flex: 1; margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--orca-muted-foreground); }
+      .status { font-size: 11px; color: var(--orca-muted-foreground); margin-right: 4px; }
+      .create { display: flex; gap: 4px; padding: 0 4px 6px; }
+      .create[hidden] { display: none; }
+      .create input {
+        flex: 1;
+        min-width: 0;
+        height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--orca-input);
+        border-radius: 6px;
+        background: var(--orca-card);
+        color: var(--orca-foreground);
+        font: inherit;
+      }
+      .error { margin: 0 4px 8px; padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--orca-destructive) 18%, transparent); color: var(--orca-foreground); font-size: 12px; }
+      .error[hidden] { display: none; }
+      ul { list-style: none; margin: 0; padding: 0; }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: var(--row-h);
+        padding: 0 8px 0 calc(6px + var(--depth) * 16px);
+        border: 1px solid transparent;
+        border-radius: 7px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .row:hover { background: var(--orca-accent); }
+      .row.selected { background: var(--orca-accent); border-color: var(--orca-border); }
+      .row.selected .label { font-weight: 600; }
+      .row.selected .file { color: var(--selected-icon); }
+      .chev { width: 12px; flex: none; display: grid; place-items: center; color: var(--orca-muted-foreground); }
+      .chev svg { width: 12px; height: 12px; transition: transform 0.12s; }
+      .open > .row .chev svg { transform: rotate(90deg); }
+      .icon { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 6px; }
+      .icon svg { width: 14px; height: 14px; }
+      .folder { color: var(--c); background: color-mix(in srgb, var(--c) 22%, transparent); }
+      .file { color: var(--orca-muted-foreground); }
+      .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      .dot { width: 6px; height: 6px; flex: none; border-radius: 50%; }
+      .dot.synced { background: var(--dot-synced); opacity: 0.75; }
+      .dot.pending { background: var(--dot-pending); }
+      li > ul { display: none; }
+      li.open > ul { display: block; }
+      .empty { padding: 24px 8px; text-align: center; color: var(--orca-muted-foreground); }
+    </style>
+  </head>
+  <body>
+    <div class="path">
+      <span id="path" title=""></span>
+      <button id="change-path" title="볼트 폴더 선택" aria-label="볼트 폴더 선택"></button>
+    </div>
+    <div class="top">
+      <select id="vault" aria-label="볼트"></select>
+      <button id="refresh" title="새로고침" aria-label="새로고침"></button>
+      <button id="sync" title="Baalda 앱을 실행해 동기화" aria-label="Baalda 동기화"></button>
+    </div>
+    <div class="section">
+      <h2>NOTES</h2>
+      <span class="status" id="status"></span>
+      <button id="new-note" title="새 노트" aria-label="새 노트"></button>
+      <button id="new-folder" title="새 폴더" aria-label="새 폴더"></button>
+      <button id="collapse" title="모두 접기" aria-label="모두 접기"></button>
+    </div>
+    <form class="create" id="create" hidden>
+      <input id="name" aria-label="이름" autocomplete="off" />
+    </form>
+    <div class="error" id="error" role="alert" hidden></div>
+    <ul id="tree" role="tree" aria-label="노트"></ul>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,45 @@
+{
+  "manifestVersion": 2,
+  "id": "baalda-notes",
+  "name": "Baalda Notes",
+  "version": "0.1.0",
+  "description": "Browse, edit and create Baalda vault notes; Baalda desktop syncs the changes.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "baalda-notes",
+        "title": "Baalda",
+        "icon": "book",
+        "entry": "panel/index.html"
+      }
+    ],
+    "customEditors": [
+      {
+        "id": "baalda-note",
+        "title": "Baalda",
+        "icon": "assets/baalda.png",
+        "extensions": [
+          ".baalda"
+        ],
+        "priority": "default",
+        "entry": "editor/index.html",
+        "frame": "isolated"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "workspace:read"
+    }
+  ],
+  "icon": "assets/baalda.png"
+}
