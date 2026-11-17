@@ -1,6 +1,7 @@
 // Baalda-style note tree. Clicking a note opens it in a main-area tab (the Baalda editor).
 import type { NoteNode, Tree, Vault } from '../src/protocol'
 import { folderColor } from './color'
+import { narrow, norm } from './filter'
 
 const ICONS = {
   refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>',
@@ -9,6 +10,7 @@ const ICONS = {
   newFolder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/>',
   folderPath: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8M13 10l3 3-3 3"/>',
   collapse: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
+  openApp: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   folderOpen: '<path d="M3 17V7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v1"/><path d="M3 17l2.6-6.1A2 2 0 0 1 7.4 10H21l-2.7 7.3A2 2 0 0 1 16.4 19H5a2 2 0 0 1-2-2z"/>',
@@ -25,11 +27,13 @@ const els = {
   error: $('error'),
   create: $<HTMLFormElement>('create'),
   name: $<HTMLInputElement>('name'),
-  path: $('path')
+  path: $('path'),
+  filter: $<HTMLInputElement>('filter')
 }
 for (const [id, icon] of [
   ['refresh', 'refresh'],
   ['sync', 'cloud'],
+  ['app', 'openApp'],
   ['new-note', 'newNote'],
   ['new-folder', 'newFolder'],
   ['collapse', 'collapse'],
@@ -41,6 +45,22 @@ let data: Tree | null = null
 let selected = ''
 let creating: 'note' | 'folder' = 'note'
 const expanded = new Set<string>()
+let query = ''
+
+/** The label with the matched part marked, as safe DOM. */
+function label(text: string): DocumentFragment {
+  const f = document.createDocumentFragment()
+  const i = query ? norm(text).indexOf(query) : -1
+  // NFKC can change lengths; only mark when the normalized form lines up with the text.
+  if (i < 0 || norm(text).length !== text.length) {
+    f.append(text)
+    return f
+  }
+  const mark = document.createElement('mark')
+  mark.textContent = text.slice(i, i + query.length)
+  f.append(text.slice(0, i), mark, text.slice(i + query.length))
+  return f
+}
 
 async function guard(fn: () => Promise<void>): Promise<void> {
   try {
@@ -64,7 +84,7 @@ function node(n: NoteNode, depth: number): HTMLLIElement {
   row.tabIndex = 0
   row.setAttribute('role', 'treeitem')
   row.dataset.key = n.key
-  const open = expanded.has(n.key)
+  const open = expanded.has(n.key) || (query !== '' && n.kind === 'folder') // filtering shows every hit
   const icon =
     n.kind === 'folder'
       ? `<span class="icon folder" style="--c:${folderColor(n.key)}">${svg(open ? 'folderOpen' : 'folder')}</span>`
@@ -72,7 +92,7 @@ function node(n: NoteNode, depth: number): HTMLLIElement {
   row.innerHTML =
     `<span class="chev">${n.kind === 'folder' ? svg('chevron') : ''}</span>${icon}<span class="label"></span>` +
     (n.sync === 'local' ? '' : `<span class="dot ${n.sync}" title="${n.sync === 'synced' ? '동기화됨' : '동기화 대기'}"></span>`)
-  ;(row.querySelector('.label') as HTMLElement).textContent = n.label
+  ;(row.querySelector('.label') as HTMLElement).append(label(n.label))
   li.append(row)
   if (n.kind === 'folder') {
     row.setAttribute('aria-expanded', String(open))
@@ -96,9 +116,10 @@ function find(items: NoteNode[], key: string): NoteNode | undefined {
 function render(): void {
   els.tree.replaceChildren()
   if (!data) return
-  if (data.items.length === 0) {
-    els.tree.innerHTML = '<li class="empty">노트가 없습니다</li>'
-  } else for (const n of data.items) els.tree.append(node(n, 0))
+  const items = query ? data.items.map((n) => narrow(n, query)).filter((n): n is NoteNode => n !== null) : data.items
+  if (items.length === 0) {
+    els.tree.innerHTML = `<li class="empty">${query ? '일치하는 노트가 없습니다' : '노트가 없습니다'}</li>`
+  } else for (const n of items) els.tree.append(node(n, 0))
   els.status.textContent = !data.remote ? '로컬' : data.pending.length ? `대기 ${data.pending.length}` : ''
 }
 
@@ -153,12 +174,31 @@ els.vault.addEventListener('change', () => {
   void refresh()
 })
 $('refresh').addEventListener('click', () => void refresh())
+els.filter.addEventListener('input', () => {
+  query = norm(els.filter.value.trim())
+  render()
+})
+els.filter.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    els.filter.value = ''
+    query = ''
+    render()
+  }
+})
 $('sync').addEventListener('click', () =>
   guard(async () => {
-    await orca.plugin.request('sync.run', { vault })
-    await refresh()
+    const btn = $<HTMLButtonElement>('sync')
+    btn.disabled = true
+    try {
+      const r = await orca.plugin.request('sync.run', { vault })
+      if (!r.started) btn.title = r.running ? 'Baalda 앱이 실행 중이라 이미 동기화되고 있습니다' : '동기화'
+      await refresh()
+    } finally {
+      btn.disabled = false
+    }
   })
 )
+$('app').addEventListener('click', () => guard(async () => void (await orca.plugin.request('app.show'))))
 $('collapse').addEventListener('click', () => {
   expanded.clear()
   saveState()
@@ -220,6 +260,20 @@ $('change-path').addEventListener('click', () =>
     }
   })
 )
+
+// The sync button's run: Baalda hidden while it uploads, closed when done.
+orca.plugin.on('sync.status', (p) => {
+  if (p.vault !== vault) return
+  const btn = $<HTMLButtonElement>('sync')
+  btn.disabled = p.state === 'syncing'
+  btn.title = p.message
+  els.status.textContent = p.state === 'syncing' ? '동기화 중' : ''
+  if (p.state !== 'syncing') void refresh()
+  if (p.state === 'timeout') {
+    els.error.textContent = p.message
+    els.error.hidden = false
+  }
+})
 
 orca.plugin.on('notes.changed', (p) => {
   if (p.vault === vault) void refresh()

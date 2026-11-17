@@ -1,10 +1,10 @@
 // Reads and writes the Baalda vault's Markdown files. Baalda is local-first: its desktop app
 // watches the vault folder and syncs every file change to the server, so writing here is syncing.
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { NoteNode, Sync, Tree, Vault } from './protocol'
-import { execFile, spawn } from 'node:child_process'
+import type { NoteNode, Sync, SyncState, Tree, Vault } from './protocol'
+import { execFile } from 'node:child_process'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 
@@ -15,8 +15,11 @@ const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Loc
 export const paths = {
   config: join(appData, 'com.baalda.context', 'config.json'),
   app: join(localAppData, 'Baalda', 'desktop.exe'),
-  orca: join(localAppData, 'Programs', 'orca', 'resources', 'bin', 'orca.exe')
+  orca: join(localAppData, 'Programs', 'orca', 'resources', 'bin', 'orca.exe'),
+  log: join(localAppData, 'com.baalda.context', 'logs', 'baalda.log')
 }
+/** Auto-close timing for a sync run: at least minMs, state quiet for quietMs, give up after maxMs. */
+const SYNC = { minMs: 15_000, quietMs: 8_000, maxMs: 300_000 }
 /** The one file the Baalda tab shows, inside the active workspace: `{ vault, path }` of the note. */
 // Under .orca/: Orca's own folder, which its dev-plugin watcher also skips.
 const VIEW_DIR = join('.orca', 'baalda')
@@ -178,15 +181,6 @@ async function ownKey(): Promise<string> {
   return pluginKey
 }
 
-function baaldaRunning(): Promise<boolean> {
-  return new Promise((done) =>
-    // Absolute path: the worker's trimmed environment may have no PATH.
-    execFile(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tasklist.exe'), ['/FI', 'IMAGENAME eq desktop.exe', '/NH'], (err, out) =>
-      done(!err && out.toLowerCase().includes('desktop.exe'))
-    )
-  )
-}
-
 let watcher: { vault: string; w: FSWatcher } | null = null
 
 function watchVault(orca: OrcaWorkerApi, vault: string): void {
@@ -202,10 +196,20 @@ function watchVault(orca: OrcaWorkerApi, vault: string): void {
   watcher = { vault, w }
 }
 
+function powershell(script: string, env: Record<string, string>, sta = false): Promise<string> {
+  const ps = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const body = '[Console]::OutputEncoding = [Text.Encoding]::UTF8\n' + script
+  const args = ['-NoProfile', '-NonInteractive', ...(sta ? ['-STA'] : []), '-EncodedCommand', Buffer.from(body, 'utf16le').toString('base64')]
+  return new Promise((done, fail) =>
+    execFile(ps, args, { env: { ...process.env, ...env }, encoding: 'utf8' }, (err, out, errOut) =>
+      err ? fail(new Error(String(errOut || err.message).slice(0, 300))) : done(out)
+    )
+  )
+}
+
 /** Windows' folder dialog, on top of Orca; answers the chosen folder, or '' when cancelled. */
 function pickFolder(initial: string): Promise<string> {
   const script = [
-    '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
     'Add-Type -AssemblyName System.Windows.Forms',
     '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
     "$d.Description = 'Baalda 볼트 폴더를 선택하세요 (.context 폴더가 있는 곳)'",
@@ -214,15 +218,143 @@ function pickFolder(initial: string): Promise<string> {
     '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }',
     "if ($d.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }"
   ].join('\n')
-  const ps = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  return new Promise((done, fail) =>
-    execFile(
-      ps,
-      ['-NoProfile', '-STA', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-      { env: { ...process.env, BAALDA_INITIAL: initial }, encoding: 'utf8' },
-      (err, out, errOut) => (err ? fail(new Error(String(errOut || err.message).slice(0, 300))) : done(out))
-    )
-  )
+  return powershell(script, { BAALDA_INITIAL: initial }, true)
+}
+
+// Window helpers for the Baalda desktop app (the sync engine). A sync run starts Baalda on its own
+// Windows desktop (DESK, in the same session): nothing it shows can reach the person's screen.
+const DESK = 'BaaldaOrcaSync'
+const WIN32 = [
+  "Add-Type @'",
+  'using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices;',
+  'public static class BW {',
+  '  delegate bool P(IntPtr h, IntPtr l);',
+  '  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct SI {',
+  '    public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;',
+  '    public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;',
+  '    public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError; }',
+  '  [StructLayout(LayoutKind.Sequential)] struct PI { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }',
+  '  [DllImport("user32.dll")] static extern bool EnumWindows(P p, IntPtr l);',
+  '  [DllImport("user32.dll")] static extern bool EnumDesktopWindows(IntPtr d, P p, IntPtr l);',
+  '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateDesktop(string n, IntPtr dev, IntPtr mode, int f, uint a, IntPtr sa);',
+  '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr OpenDesktop(string n, int f, bool inherit, uint a);',
+  '  [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr d);',
+  '  [DllImport("user32.dll")] static extern bool SetThreadDesktop(IntPtr d);',
+  '  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool CreateProcess(string app, string cmd, IntPtr pa, IntPtr ta, bool inherit, uint f, IntPtr env, string dir, ref SI si, out PI pi);',
+  '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);',
+  '  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);',
+  '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);',
+  '  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);',
+  '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);',
+  '  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);',
+  '  const uint ALL = 0x10000000;',
+  '  static bool Titled(IntPtr h, string title) { var b = new StringBuilder(256); GetWindowText(h, b, 256); return b.ToString() == title; }',
+  '  /** Starts exe on the named desktop (created if needed); answers its pid, or 0. */',
+  '  public static int Start(string exe, string desk) {',
+  '    var d = CreateDesktop(desk, IntPtr.Zero, IntPtr.Zero, 0, ALL, IntPtr.Zero);',
+  '    if (d == IntPtr.Zero) return 0;',
+  '    var si = new SI(); si.cb = Marshal.SizeOf(typeof(SI)); si.lpDesktop = "WinSta0\\\\" + desk;',
+  '    PI pi;',
+  '    if (!CreateProcess(exe, null, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, System.IO.Path.GetDirectoryName(exe), ref si, out pi)) return 0;',
+  '    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);',
+  '    System.Threading.Thread.Sleep(5000); // keep the desktop open until the app has attached to it',
+  '    CloseDesktop(d);',
+  '    return pi.dwProcessId;',
+  '  }',
+  '  /** Windows titled `title` on the named desktop (none when it does not exist). */',
+  '  public static List<IntPtr> OnDesk(string desk, string title) {',
+  '    var r = new List<IntPtr>(); var d = OpenDesktop(desk, 0, false, ALL);',
+  '    if (d == IntPtr.Zero) return r;',
+  '    EnumDesktopWindows(d, (h, l) => { if (Titled(h, title)) r.Add(h); return true; }, IntPtr.Zero);',
+  '    CloseDesktop(d); return r;',
+  '  }',
+  '  /** Posts WM_CLOSE to the windows titled `title` on the named desktop. Messages do not cross',
+  '   *  desktops, so a fresh thread (no windows of its own) joins that desktop to post them. */',
+  '  public static int CloseOn(string desk, string title) {',
+  '    int n = 0;',
+  '    var t = new System.Threading.Thread(() => {',
+  '      var d = OpenDesktop(desk, 0, false, ALL);',
+  '      if (d == IntPtr.Zero || !SetThreadDesktop(d)) return;',
+  '      EnumDesktopWindows(d, (h, l) => { if (Titled(h, title) && PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero)) n++; return true; }, IntPtr.Zero);',
+  '    });',
+  '    t.Start(); t.Join();',
+  '    return n;',
+  '  }',
+  '  /** Windows titled `title` of process `pid` on the person\'s desktop. */',
+  '  public static List<IntPtr> Of(uint pid, string title) {',
+  '    var r = new List<IntPtr>();',
+  '    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && Titled(h, title)) r.Add(h); return true; }, IntPtr.Zero);',
+  '    return r;',
+  '  }',
+  '}',
+  "'@",
+  'function Baalda { Get-Process desktop -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:BAALDA_EXE } }'
+].join('\n')
+
+/** Whether the Baalda desktop app (this exact exe) runs. */
+async function baaldaRunning(): Promise<boolean> {
+  const script = 'if (Get-Process desktop -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:BAALDA_EXE }) { "yes" }'
+  return (await powershell(script, { BAALDA_EXE: paths.app })).includes('yes')
+}
+
+/**
+ * Starts Baalda on the hidden desktop. Baalda has no hidden-start option and shows its own window,
+ * but a window on another desktop never reaches the person's screen. Answers the pid, or throws.
+ */
+async function startHidden(): Promise<number> {
+  const script = [WIN32, '[Console]::Out.Write([BW]::Start($env:BAALDA_EXE, $env:BAALDA_DESK))'].join('\n')
+  const pid = Number(await powershell(script, { BAALDA_EXE: paths.app, BAALDA_DESK: DESK }))
+  if (!pid) throw new Error('Baalda를 숨김 데스크톱에서 실행하지 못했습니다.')
+  return pid
+}
+
+/**
+ * Closes the Baalda the sync run started, the way its X button does (WM_CLOSE to its "Baalda"
+ * window), and waits for that window to go. Its sync engine lives in that window's webview, so
+ * once it is gone nothing is syncing; but the process stays behind with no window, and Baalda
+ * being single-instance, the person could then not open it again. So a process still left a few
+ * seconds later is ended. Answers 'closed', or 'running' when the window never closed.
+ */
+function closeApp(): Promise<string> {
+  const script = [
+    WIN32,
+    "function Mains { [BW]::OnDesk($env:BAALDA_DESK, 'Baalda') }",
+    "[void][BW]::CloseOn($env:BAALDA_DESK, 'Baalda')",
+    '$end = (Get-Date).AddSeconds(15)',
+    'while (@(Mains).Count -gt 0 -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }',
+    "if (@(Mains).Count -gt 0) { [Console]::Out.Write('running'); exit }",
+    '$end = (Get-Date).AddSeconds(3)',
+    'while ((Baalda) -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 300 }',
+    'Baalda | Stop-Process -ErrorAction SilentlyContinue',
+    'Start-Sleep -Milliseconds 500',
+    "if (Baalda) { [Console]::Out.Write('running') } else { [Console]::Out.Write('closed') }"
+  ].join('\n')
+  return powershell(script, { BAALDA_EXE: paths.app, BAALDA_DESK: DESK })
+}
+
+/**
+ * Shows Baalda to the person. One on the hidden desktop cannot be moved over, and one with no
+ * window cannot be shown: both are ended and Baalda starts normally. One already on their desktop
+ * is brought forward.
+ */
+function showApp(): Promise<string> {
+  const script = [
+    WIN32,
+    '$shown = $false',
+    'if (@([BW]::OnDesk($env:BAALDA_DESK, \'Baalda\')).Count -eq 0) {',
+    '  foreach ($p in @(Baalda)) {',
+    "    foreach ($h in [BW]::Of([uint32]$p.Id, 'Baalda')) { [void][BW]::ShowWindow($h, 5); [void][BW]::SetForegroundWindow($h); $shown = $true }",
+    '  }',
+    '}',
+    'if (-not $shown) {',
+    '  Baalda | Stop-Process -ErrorAction SilentlyContinue',
+    '  $end = (Get-Date).AddSeconds(5)',
+    '  while ((Baalda) -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 200 }',
+    '  Start-Process -FilePath $env:BAALDA_EXE',
+    '}',
+    "[Console]::Out.Write('ok')"
+  ].join('\n')
+  return powershell(script, { BAALDA_EXE: paths.app, BAALDA_DESK: DESK })
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
@@ -320,13 +452,70 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { path: kind === 'folder' ? rel + '/' : rel }
   })
 
+  /** Bumped by "앱 창 열기": the person took the app over, so a pending auto-close is dropped. */
+  let syncRun = 0
+  const status = (vault: string, state: SyncState, message: string) => orca.panels.post('sync.status', { vault, state, message })
+
+  /**
+   * Baalda pushes on its own once running; nothing says "done". Treat it as done when it has
+   * connected (`channel-ready` in its log since we started it), the vault has nothing pending,
+   * and its sync state file has been quiet for a while. Then close it like its X button would.
+   */
+  async function closeWhenSynced(vault: string, run: number, logStart: number): Promise<void> {
+    const started = Date.now()
+    const stateFile = join(vault, '.context', 'config.json')
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000))
+      if (run !== syncRun) return
+      const elapsed = Date.now() - started
+      if (elapsed > SYNC.maxMs) {
+        orca.log('sync: gave up waiting; leaving Baalda running')
+        status(vault, 'timeout', '동기화 완료를 확인하지 못했습니다. Baalda 앱 창 열기로 확인하세요.')
+        return
+      }
+      if (elapsed < SYNC.minMs) continue
+      const log = await readFile(paths.log, 'utf8').catch(() => '')
+      if (!log.slice(logStart).includes('channel-ready')) continue
+      const quietMs = Date.now() - ((await stat(stateFile).catch(() => null))?.mtimeMs ?? 0)
+      if (quietMs < SYNC.quietMs) continue
+      const pending = (await tree(vault)).pending.length
+      if (pending > 0) {
+        status(vault, 'syncing', `업로드 대기 ${pending}개`)
+        continue
+      }
+      orca.log(`sync: done after ${Math.round(elapsed / 1000)}s, closing Baalda`)
+      const closed = (await closeApp()).includes('closed')
+      orca.log(`sync: Baalda ${closed ? 'closed' : 'did not close'}`)
+      status(vault, closed ? 'done' : 'timeout', closed ? '동기화 완료, Baalda를 닫았습니다.' : 'Baalda가 닫히지 않아 켜 둔 채로 둡니다.')
+      return
+    }
+  }
+
+  // Sync = run Baalda's own engine with no window until local changes are uploaded, then close it.
   orca.panels.handle('sync.run', async ({ vault }) => {
-    await vaultDir(vault)
+    const v = await vaultDir(vault)
     if (process.platform !== 'win32') return { started: false, running: false }
+    // A Baalda the person runs themselves syncs live already; never close theirs.
     if (await baaldaRunning()) return { started: false, running: true }
-    if (!existsSync(paths.app)) throw new Error(`Baalda app not found: ${paths.app}`)
-    spawn(paths.app, [], { detached: true, stdio: 'ignore' }).unref()
+    if (!existsSync(paths.app)) throw new Error(`Baalda 앱을 찾을 수 없습니다: ${paths.app}`)
+    const run = ++syncRun
+    const logStart = (await stat(paths.log).catch(() => null))?.size ?? 0
+    status(v, 'syncing', '동기화 중…')
+    orca.log(`sync: starting Baalda hidden for ${v}`)
+    const pid = await startHidden()
+    orca.log(`sync: Baalda pid ${pid} on the hidden desktop`)
+    void closeWhenSynced(v, run, logStart).catch((e: unknown) =>
+      status(v, 'timeout', `동기화 확인 실패: ${e instanceof Error ? e.message : String(e)}`)
+    )
     return { started: true, running: true }
+  })
+
+  orca.panels.handle('app.show', async () => {
+    if (process.platform !== 'win32') throw new Error('Windows에서만 지원합니다.')
+    if (!existsSync(paths.app)) throw new Error(`Baalda 앱을 찾을 수 없습니다: ${paths.app}`)
+    syncRun++ // keep the app the person asked to see
+    await showApp()
+    return { ok: true as const }
   })
 }
 

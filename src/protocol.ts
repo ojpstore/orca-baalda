@@ -1,5 +1,7 @@
 // The panel <-> worker contract, declared once: panel/main.ts and src/worker.ts both read it.
 export type Vault = { name: string; path: string }
+/** A sync run: Baalda runs hidden ('syncing'), then closes ('done'), or is left running ('timeout'). */
+export type SyncState = 'syncing' | 'done' | 'timeout'
 /** 'local': the vault has no server (sync off in Baalda). */
 export type Sync = 'synced' | 'pending' | 'local'
 /** Folder keys end with '/', note keys are vault-relative paths ending in '.md'. */
@@ -38,7 +40,9 @@ declare module 'orca' {
       input: { vault: string; folder: string; name: string; kind: 'note' | 'folder' }
       output: { path: string }
     }
-    /** Starts the Baalda desktop app (the sync engine) if it is not running. */
+    /** Shows the Baalda desktop app's window (hidden by sync.run), or starts it normally. */
+    'app.show': { output: { ok: true } }
+    /** Starts the Baalda desktop app (the sync engine) with no window if it is not running. */
     'sync.run': { input: { vault: string }; output: { started: boolean; running: boolean } }
   }
   interface PluginPanelEvents {
@@ -46,5 +50,7 @@ declare module 'orca' {
     'notes.changed': { vault: string }
     /** The Baalda tab now shows this note (a click in the panel or a followed link). */
     'note.shown': { vault: string; path: string }
+    /** Progress of the sync button's run. */
+    'sync.status': { vault: string; state: SyncState; message: string }
   }
 }

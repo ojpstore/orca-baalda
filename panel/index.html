@@ -56,6 +56,18 @@
       .section { display: flex; align-items: center; gap: 2px; padding: 0 4px 6px; }
       .section h2 { flex: 1; margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--orca-muted-foreground); }
       .status { font-size: 11px; color: var(--orca-muted-foreground); margin-right: 4px; }
+      .filter { padding: 0 4px 6px; }
+      .filter input {
+        width: 100%;
+        height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--orca-input);
+        border-radius: 6px;
+        background: var(--orca-card);
+        color: var(--orca-foreground);
+        font: inherit;
+      }
+      mark { background: color-mix(in srgb, var(--orca-primary) 35%, transparent); color: inherit; border-radius: 2px; }
       .create { display: flex; gap: 4px; padding: 0 4px 6px; }
       .create[hidden] { display: none; }
       .create input {
@@ -111,7 +123,8 @@
     <div class="top">
       <select id="vault" aria-label="볼트"></select>
       <button id="refresh" title="새로고침" aria-label="새로고침"></button>
-      <button id="sync" title="Baalda 앱을 실행해 동기화" aria-label="Baalda 동기화"></button>
+      <button id="sync" title="동기화 (Baalda를 창 없이 실행, 업로드가 끝나면 종료)" aria-label="Baalda 동기화"></button>
+      <button id="app" title="Baalda 앱 창 열기" aria-label="Baalda 앱 창 열기"></button>
     </div>
     <div class="section">
       <h2>NOTES</h2>
@@ -119,6 +132,9 @@
       <button id="new-note" title="새 노트" aria-label="새 노트"></button>
       <button id="new-folder" title="새 폴더" aria-label="새 폴더"></button>
       <button id="collapse" title="모두 접기" aria-label="모두 접기"></button>
+    </div>
+    <div class="filter">
+      <input id="filter" type="search" aria-label="노트 필터" placeholder="노트 필터" autocomplete="off" spellcheck="false" />
     </div>
     <form class="create" id="create" hidden>
       <input id="name" aria-label="이름" autocomplete="off" />
