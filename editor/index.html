@@ -134,11 +134,12 @@
       .bar #find button:hover { background: var(--orca-muted); }
       ::highlight(find) { background: rgb(255 200 0 / 0.35); }
       ::highlight(find-now) { background: rgb(255 140 0 / 0.85); color: #000; }
+      #view.tts .copy, #view.tts .props { display: none; }
       [hidden] { display: none !important; }
     </style>
   </head>
   <body>
-    <div class="bar"><strong id="title"></strong><span id="state"></span><div id="find" role="search" hidden><input type="search" placeholder="찾기" aria-label="노트에서 찾기" spellcheck="false" /><span class="count" aria-live="polite"></span><button data-d="-1" title="이전 (Shift+Enter)" aria-label="이전">↑</button><button data-d="1" title="다음 (Enter)" aria-label="다음">↓</button><button data-d="0" title="닫기 (Esc)" aria-label="닫기">✕</button></div><button id="mode" hidden>편집</button></div>
+    <div class="bar"><strong id="title"></strong><span id="state"></span><div id="find" role="search" hidden><input type="search" placeholder="찾기" aria-label="노트에서 찾기" spellcheck="false" /><span class="count" aria-live="polite"></span><button data-d="-1" title="이전 (Shift+Enter)" aria-label="이전">↑</button><button data-d="1" title="다음 (Enter)" aria-label="다음">↓</button><button data-d="0" title="닫기 (Esc)" aria-label="닫기">✕</button></div><button id="speak" title="소리 내어 읽기" hidden>읽기</button><button id="mode" hidden>편집</button></div>
     <div id="tools" role="toolbar" aria-label="Markdown 서식" hidden>
       <button data-t="h1" title="제목 1">H1</button>
       <button data-t="h2" title="제목 2">H2</button>

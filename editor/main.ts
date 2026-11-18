@@ -20,6 +20,38 @@ main.addEventListener('scroll', () => (top.hidden = main.scrollTop < 200), { pas
 top.addEventListener('click', () => main.scrollTo({ top: 0, behavior: 'smooth' }))
 const emojiBtn = tools.querySelector('[data-t="emoji"]') as HTMLButtonElement
 
+// Read the note aloud with the OS voices. Spoken a line at a time: Chromium cuts off long utterances.
+// Only the stop button (or the end of the text) stops it: switching notes, tabs or modes doesn't.
+const speak = document.getElementById('speak') as HTMLButtonElement
+let reading = false
+/** While reading the button stays visible (as 정지), even in edit mode or on an HTML page. */
+function syncSpeak(): void {
+  speak.textContent = reading ? '정지' : '읽기'
+  speak.hidden = !reading && (!target || editing || isPage(target))
+}
+function setReading(on: boolean): void {
+  reading = on
+  syncSpeak()
+}
+speak.addEventListener('click', () => {
+  if (reading) {
+    speechSynthesis.cancel()
+    return setReading(false)
+  }
+  view.classList.add('tts') // leave out copy buttons and properties
+  const lines = view.innerText.split('\n').map((l) => l.trim()).filter(Boolean)
+  view.classList.remove('tts')
+  if (!lines.length) return
+  speechSynthesis.cancel() // drop anything left over
+  lines.forEach((l, i) => {
+    const u = new SpeechSynthesisUtterance(l)
+    u.lang = 'ko-KR'
+    if (i === lines.length - 1) u.onend = () => setReading(false)
+    speechSynthesis.speak(u)
+  })
+  setReading(true)
+})
+
 const escape = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
@@ -79,6 +111,7 @@ const isPage = (t: Target | null) => !!t && /\.html?$/i.test(t.path)
 function show(): void {
   title.textContent = target ? target.path.slice(target.path.lastIndexOf('/') + 1).replace(/\.(md|html?)$/i, '') : ''
   mode.hidden = !target || locked
+  syncSpeak()
   page.hidden = editing || !isPage(target)
   view.hidden = editing || isPage(target)
   if (!target) view.innerHTML = '<p class="empty">Baalda 패널에서 노트를 선택하세요</p>'
