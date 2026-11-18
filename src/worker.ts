@@ -25,11 +25,12 @@ const SYNC = { minMs: 15_000, quietMs: 8_000, maxMs: 300_000 }
 const VIEW_DIR = join('.orca', 'baalda')
 const VIEW_FILE = 'Baalda.baalda'
 
-/** Orca's focused workspace. Orca opens a tab only for a file inside the workspace that holds it. */
+/** Orca's focused workspace. Orca opens a tab only for a file inside the workspace that holds it.
+ *  With none focused, the home folder holds the view file (never the vault: Baalda would sync it). */
 async function activeWorkspace(orca: OrcaWorkerApi): Promise<string> {
   const ctx = await orca.host.call('workspace.readContext', {})
   const id = ctx?.workspaceId
-  if (!id) throw new Error('활성 워크스페이스가 없습니다. Orca에서 워크스페이스를 먼저 여세요.')
+  if (!id) return homedir()
   const ws = (await orca.host.call('workspace.list', {})).workspaces.find((w) => w.id === id)
   if (!ws) throw new Error(`워크스페이스를 찾을 수 없습니다: ${id}`)
   if (ws.hostId && ws.hostId !== 'local') throw new Error('원격(SSH) 워크스페이스에는 Baalda 탭을 열 수 없습니다.')

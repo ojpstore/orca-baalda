@@ -23,7 +23,7 @@ Orca 사이드바에서 Baalda 볼트의 노트를 보고, 편집하고, 새로 
 ### 에디터
 
 - 노트 열기: **현재 활성 워크스페이스**의 Baalda 탭 하나에 표시. 워커가 `<워크스페이스>/.orca/baalda/Baalda.baalda`
-  (자체 `.gitignore`로 git에서 제외)에 `{vault, path}`를 쓰고 그 파일을 Baalda 에디터로 연다
+  (자체 `.gitignore`로 git에서 제외, 활성 워크스페이스가 없으면 `~/.orca/baalda/`)에 `{vault, path}`를 쓰고 그 파일을 Baalda 에디터로 연다
   (이미 열려 있으면 같은 탭). 편집은 자동 저장(0.8초) + Ctrl+S. `.orca/`는 dev 플러그인 감시에서도 제외됨
 - 링크: `[[경로|별칭]]`, 상대 `.md` 링크 클릭 시 같은 탭에서 이동(볼트 경로 → 상대 경로 → 이름 순으로 찾음).
   `.html` 페이지(대시보드)는 sandbox iframe으로 렌더링하고, Baalda SDK(`baalda.app.open`) 대체 스크립트를 넣어
