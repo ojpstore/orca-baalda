@@ -506,8 +506,12 @@ export default function activate(orca: OrcaWorkerApi): void {
   /** Bumped by "앱 창 열기": the person took the app over, so a pending auto-close is dropped. */
   let syncRun = 0
   let server = ''
-  const status = (vault: string, state: SyncState, message: string) =>
+  /** Vault of the run still waiting to close Baalda, so "앱 창 열기" can end it for the panel. */
+  let syncing: string | null = null
+  const status = (vault: string, state: SyncState, message: string) => {
+    syncing = state === 'syncing' ? vault : null
     orca.panels.post('sync.status', { vault, state, message, server })
+  }
 
   /**
    * Baalda pushes on its own once running; nothing says "done". Treat it as done when it has
@@ -568,6 +572,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (process.platform !== 'win32') throw new Error('Windows에서만 지원합니다.')
     if (!existsSync(paths.app)) throw new Error(`Baalda 앱을 찾을 수 없습니다: ${paths.app}`)
     syncRun++ // keep the app the person asked to see
+    if (syncing) status(syncing, 'done', 'Baalda 앱 창을 열어 자동 종료를 취소했습니다.')
     await showApp()
     return { ok: true as const }
   })

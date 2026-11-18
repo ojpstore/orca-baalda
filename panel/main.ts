@@ -305,12 +305,15 @@ $('sync').addEventListener('click', () =>
   guard(async () => {
     const btn = $<HTMLButtonElement>('sync')
     btn.disabled = true
+    let started = false
     try {
       const r = await orca.plugin.request('sync.run', { vault })
+      started = r.started
       if (!r.started) btn.title = r.running ? 'Baalda 앱이 실행 중이라 이미 동기화되고 있습니다' : '동기화'
       await refresh()
     } finally {
-      btn.disabled = false
+      // A started run re-enables the button through sync.status when it ends.
+      if (!started) btn.disabled = false
     }
   })
 )
