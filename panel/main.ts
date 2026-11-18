@@ -97,6 +97,15 @@ function node(n: NoteNode, depth: number): HTMLLIElement {
   row.tabIndex = 0
   row.setAttribute('role', 'treeitem')
   row.dataset.key = n.key
+  // Dragging a row onto an Orca terminal pastes its absolute path. The terminal only takes
+  // Orca's file-path type, and rejects it without a source host that matches its own.
+  row.draggable = true
+  row.addEventListener('dragstart', (e) => {
+    const p = (vault + '/' + n.key.replace(/\/$/, '')).replace(/\//g, '\\')
+    e.dataTransfer?.setData('text/x-orca-file-path', p)
+    e.dataTransfer?.setData('application/x-orca-workspace-file-source', JSON.stringify({ version: 1, executionHostId: 'local', workspaceId: 'baalda' }))
+    e.dataTransfer?.setData('text/plain', p)
+  })
   const open = expanded.has(n.key) || (query !== '' && n.kind === 'folder') // filtering shows every hit
   const icon =
     n.kind === 'folder'
