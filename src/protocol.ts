@@ -55,6 +55,11 @@ declare module 'orca' {
     'note.delete': { input: { vault: string; path: string }; output: { ok: true } }
     /** Shows the Baalda desktop app's window (hidden by sync.run), or starts it normally. */
     'app.show': { output: { ok: true } }
+    /** Reads `text` aloud with Windows' Korean voice, repeating until speech.stop. */
+    'speech.start': { input: { text: string }; output: { ok: true } }
+    'speech.stop': { output: { ok: true } }
+    /** Whether speech is running: the frame may have been recreated while it went on. */
+    'speech.state': { output: { on: boolean } }
     /** Starts the Baalda desktop app (the sync engine) with no window if it is not running. */
     'sync.run': { input: { vault: string }; output: { started: boolean; running: boolean } }
   }
@@ -66,6 +71,8 @@ declare module 'orca' {
     /** The vault's lock checkbox changed. */
     'vault.locked': { vault: string; locked: boolean }
     /** Progress of the sync button's run. */
+    /** Reading stopped on its own (no Korean voice installed). */
+    'speech.ended': Record<string, never>
     'sync.status': { vault: string; state: SyncState; message: string; server: string }
   }
 }

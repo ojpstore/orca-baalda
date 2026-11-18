@@ -20,8 +20,8 @@ main.addEventListener('scroll', () => (top.hidden = main.scrollTop < 200), { pas
 top.addEventListener('click', () => main.scrollTo({ top: 0, behavior: 'smooth' }))
 const emojiBtn = tools.querySelector('[data-t="emoji"]') as HTMLButtonElement
 
-// Read the note aloud with the OS voices. Spoken a line at a time: Chromium cuts off long utterances.
-// Only the stop button (or the end of the text) stops it: switching notes, tabs or modes doesn't.
+// Read the note aloud. The worker speaks (Windows' Korean voice, repeating): Orca drops this frame
+// when its tab is hidden, so speech here would die. Only the stop button stops it.
 const speak = document.getElementById('speak') as HTMLButtonElement
 let reading = false
 /** While reading the button stays visible (as 정지), even in edit mode or on an HTML page. */
@@ -35,22 +35,22 @@ function setReading(on: boolean): void {
 }
 speak.addEventListener('click', () => {
   if (reading) {
-    speechSynthesis.cancel()
+    void orca.plugin.request('speech.stop')
     return setReading(false)
   }
   view.classList.add('tts') // leave out copy buttons and properties
-  const lines = view.innerText.split('\n').map((l) => l.trim()).filter(Boolean)
+  const text = view.innerText.split('\n').map((l) => l.trim()).filter(Boolean).join('\n')
   view.classList.remove('tts')
-  if (!lines.length) return
-  speechSynthesis.cancel() // drop anything left over
-  lines.forEach((l, i) => {
-    const u = new SpeechSynthesisUtterance(l)
-    u.lang = 'ko-KR'
-    if (i === lines.length - 1) u.onend = () => setReading(false)
-    speechSynthesis.speak(u)
-  })
+  if (!text) return
   setReading(true)
+  orca.plugin.request('speech.start', { text }).catch((e) => {
+    setReading(false)
+    state.textContent = String(e?.message ?? e)
+  })
 })
+orca.plugin.on('speech.ended', () => setReading(false))
+// A frame recreated while speech goes on must still show the stop button.
+void orca.plugin.request('speech.state').then((r) => setReading(r.on))
 
 const escape = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)

@@ -2,10 +2,10 @@
 // watches the vault folder and syncs every file change to the server, so writing here is syncing.
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { NoteNode, Sync, SyncState, Tree, Vault } from './protocol'
-import { execFile } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 
 // Orca starts workers with a trimmed environment: derive the Windows dirs from the home folder.
@@ -577,9 +577,57 @@ export default function activate(orca: OrcaWorkerApi): void {
     await showApp()
     return { ok: true as const }
   })
+
+  // Reading aloud lives here, not in the editor frame: Orca drops the frame when its tab is hidden,
+  // and speech there dies with it. Windows' own voices, looping over the text until speech.stop.
+  orca.panels.handle('speech.start', async ({ text }) => {
+    if (process.platform !== 'win32') throw new Error('Windows에서만 지원합니다.')
+    stopSpeech()
+    const file = join(tmpdir(), `baalda-tts-${process.pid}.txt`)
+    await writeFile(file, text, 'utf8')
+    const body = ['[Console]::OutputEncoding = [Text.Encoding]::UTF8', SPEAK_SCRIPT].join('\n')
+    const ps = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    const p = spawn(ps, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(body, 'utf16le').toString('base64')], {
+      env: { ...process.env, BAALDA_TTS: file },
+      windowsHide: true,
+      stdio: 'ignore'
+    })
+    speech = p
+    // Ends by itself only when there is no Korean voice (or on error): tell the editor so the button resets.
+    p.on('exit', () => {
+      if (speech !== p) return
+      speech = null
+      orca.panels.post('speech.ended', {})
+    })
+    return { ok: true as const }
+  })
+  orca.panels.handle('speech.state', async () => ({ on: speech !== null }))
+  orca.panels.handle('speech.stop', async () => {
+    stopSpeech()
+    return { ok: true as const }
+  })
 }
 
+let speech: ChildProcess | null = null
+function stopSpeech(): void {
+  const p = speech
+  speech = null // before kill: its exit event must not report an end
+  p?.kill()
+}
+
+const SPEAK_SCRIPT = [
+  'Add-Type -AssemblyName System.Speech',
+  '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+  "$v = $s.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'ko*' } | Select-Object -First 1",
+  'if (-not $v) { exit 2 }',
+  '$s.SelectVoice($v.VoiceInfo.Name)',
+  '$lines = [IO.File]::ReadAllLines($env:BAALDA_TTS, [Text.Encoding]::UTF8) | Where-Object { $_.Trim() }',
+  'if (-not $lines) { exit 3 }',
+  'while ($true) { foreach ($l in $lines) { $s.Speak($l) } }'
+].join('\n')
+
 export function deactivate(): void {
+  stopSpeech()
   watcher?.w.close()
   watcher = null
 }
