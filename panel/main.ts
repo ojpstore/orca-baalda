@@ -160,7 +160,12 @@ function build(): void {
 /** Buttons that act on the selected note. */
 function toolbar(): void {
   const note = !!selected && !selected.endsWith('/') && !!data && !!find(data.items, selected)
-  $<HTMLButtonElement>('delete').disabled = !note
+  // A locked vault takes no new notes, folders or deletes.
+  const locked = els.lock.checked
+  $<HTMLButtonElement>('delete').disabled = !note || locked
+  $<HTMLButtonElement>('new-note').disabled = locked
+  $<HTMLButtonElement>('new-folder').disabled = locked
+  if (locked) els.create.hidden = true
   const star = $<HTMLButtonElement>('bookmark')
   star.disabled = !note
   star.setAttribute('aria-pressed', String(note && starred().includes(selected)))
@@ -292,6 +297,7 @@ els.lock.addEventListener('change', () =>
     await orca.plugin.request('vault.lock', { vault, locked: els.lock.checked })
   }).then(() => {
     if (!els.error.hidden) els.lock.checked = !els.lock.checked // not saved: show the real state
+    toolbar()
   })
 )
 $('refresh').addEventListener('click', () => void refresh())
@@ -389,7 +395,7 @@ els.create.addEventListener('submit', (e) => {
 // Delete asks first in a <dialog>: the panel's sandbox may not allow confirm().
 function startDelete(): void {
   const n = data && find(data.items, selected)
-  if (!n || n.kind === 'folder') return
+  if (!n || n.kind === 'folder' || els.lock.checked) return
   $('confirm-text').textContent = `'${n.label}' 노트를 삭제할까요? (휴지통으로 이동)`
   const dlg = $<HTMLDialogElement>('confirm')
   dlg.returnValue = ''
