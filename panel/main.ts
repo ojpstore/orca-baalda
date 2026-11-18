@@ -1,4 +1,4 @@
-// Baalda-style note tree. Clicking a note opens it in a main-area tab (the Baalda editor).
+// Baalda-style note tree. Double-clicking (or Enter on) a note opens it in a main-area tab (the Baalda editor).
 import type { NoteNode, Tree, Vault } from '../src/protocol'
 import { folderColor } from './color'
 import { narrow, norm } from './filter'
@@ -113,7 +113,7 @@ function node(n: NoteNode, depth: number): HTMLLIElement {
       : `<span class="icon file">${svg(n.kind === 'page' ? 'page' : 'file')}</span>`
   row.innerHTML =
     `<span class="chev">${n.kind === 'folder' ? svg('chevron') : ''}</span>${icon}<span class="label"></span>` +
-    (n.kind !== 'folder' && starred().includes(n.key) ? `<span class="star" title="즐겨찾기">${svg('star')}</span>` : '') +
+    (n.kind !== 'folder' && starred().includes(n.key) ? `<span class="star" title="즐겨찾기 해제">${svg('star')}</span>` : '') +
     (n.sync === 'local' ? '' : `<span class="dot ${n.sync}" title="${n.sync === 'synced' ? '동기화됨' : '동기화 대기'}"></span>`)
   ;(row.querySelector('.label') as HTMLElement).append(label(n.label))
   li.append(row)
@@ -225,9 +225,30 @@ async function activate(key: string): Promise<void> {
   saveState()
 }
 
+// Selects without re-rendering, so the row survives for a following dblclick.
+function selectRow(row: HTMLElement): void {
+  els.tree.querySelector('.row.selected')?.classList.remove('selected')
+  row.classList.add('selected')
+  row.focus()
+  selected = row.dataset.key!
+  toolbar()
+  saveState()
+}
+
+// Single click toggles a folder but only selects a note; double click or Enter opens it.
 els.tree.addEventListener('click', (e) => {
   const row = (e.target as HTMLElement).closest<HTMLElement>('.row')
-  if (row?.dataset.key) void activate(row.dataset.key)
+  if (!row?.dataset.key) return
+  if ((e.target as HTMLElement).closest('.star')) {
+    // The star only shows on starred notes, so clicking it un-stars.
+    selected = row.dataset.key
+    toggleBookmark()
+  } else if (row.getAttribute('aria-expanded') !== null) void activate(row.dataset.key)
+  else selectRow(row)
+})
+els.tree.addEventListener('dblclick', (e) => {
+  const row = (e.target as HTMLElement).closest<HTMLElement>('.row')
+  if (row?.dataset.key && row.getAttribute('aria-expanded') === null) void activate(row.dataset.key)
 })
 // On the document, not the tree: with nothing focused (the panel just opened, a dialog closed)
 // the arrows start from the selected row.
@@ -241,13 +262,8 @@ document.addEventListener('keydown', (e) => {
     const rows = Array.from(els.tree.querySelectorAll<HTMLElement>('.row')).filter((r) => r.offsetParent !== null)
     const next = row ? rows[rows.indexOf(row) + (e.key === 'ArrowDown' ? 1 : -1)] : rows[0]
     if (!next?.dataset.key) return
-    row?.classList.remove('selected')
-    next.classList.add('selected')
-    next.focus()
+    selectRow(next)
     next.scrollIntoView({ block: 'nearest' })
-    selected = next.dataset.key
-    toolbar()
-    saveState()
   }
   if (row?.dataset.key && (e.key === 'b' || e.key === 'B')) {
     selected = row.dataset.key
