@@ -90,3 +90,11 @@ test('deletes notes only, to the Recycle Bin on Windows', async () => {
   await assert.rejects(worker.request('note.delete', { vault, path: '../config.json' }))
   await worker.deactivate()
 })
+
+test('searches note text, case-insensitive, skipping dot folders', async () => {
+  const { vault } = fixture()
+  writeFileSync(join(vault, '.context', 'x.md'), 'dash')
+  assert.deepEqual(await main.search(vault, 'dash'), ['Dashboards/Home.html'])
+  assert.deepEqual(await main.search(vault, 'hi'), ['Welcome.md'])
+  assert.deepEqual(await main.search(vault, '없는말'), [])
+})

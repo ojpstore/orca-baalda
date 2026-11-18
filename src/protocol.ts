@@ -31,6 +31,8 @@ declare module 'orca' {
     'vault.pick': { input: { initial: string }; output: { vault: Vault | null } }
     /** `locked`: the vault is read-only here (its notes show no edit button). */
     'notes.tree': { input: { vault: string }; output: Tree & { locked: boolean } }
+    /** Notes whose text contains `q` (normalized as panel/filter's norm), at most 500 keys. */
+    'notes.search': { input: { vault: string; q: string }; output: { keys: string[] } }
     'vault.lock': { input: { vault: string; locked: boolean }; output: { ok: true } }
     /** Opens the note in a main-area editor tab. */
     'note.open': { input: { vault: string; path: string }; output: { ok: true } }

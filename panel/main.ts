@@ -9,6 +9,7 @@ const ICONS = {
   newNote: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 12v6M9 15h6"/>',
   newFolder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/>',
   folderPath: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8M13 10l3 3-3 3"/>',
+  star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>',
   collapse: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
   openApp: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
@@ -38,6 +39,7 @@ for (const [id, icon] of [
   ['app', 'openApp'],
   ['new-note', 'newNote'],
   ['new-folder', 'newFolder'],
+  ['bookmark', 'star'],
   ['delete', 'trash'],
   ['collapse', 'collapse'],
   ['change-path', 'folderPath']
@@ -49,6 +51,13 @@ let selected = ''
 let creating: 'note' | 'folder' = 'note'
 const expanded = new Set<string>()
 let query = ''
+let tab: 'notes' | 'stars' = 'notes'
+/** Bookmarked note keys, by vault path. */
+let bookmarks: Record<string, string[]> = {}
+const starred = () => bookmarks[vault] ?? []
+/** Notes whose text contains `query`, from the worker. */
+let contentHits = new Set<string>()
+let searchTimer = 0
 
 /** The label with the matched part marked, as safe DOM. */
 function label(text: string): DocumentFragment {
@@ -76,7 +85,7 @@ async function guard(fn: () => Promise<void>): Promise<void> {
 }
 
 function saveState(): void {
-  void orca.storage.set('ui', { vault, expanded: [...expanded], selected }).catch(() => {})
+  void orca.storage.set('ui', { vault, expanded: [...expanded], selected, tab }).catch(() => {})
 }
 
 function node(n: NoteNode, depth: number): HTMLLIElement {
@@ -94,6 +103,7 @@ function node(n: NoteNode, depth: number): HTMLLIElement {
       : `<span class="icon file">${svg(n.kind === 'page' ? 'page' : 'file')}</span>`
   row.innerHTML =
     `<span class="chev">${n.kind === 'folder' ? svg('chevron') : ''}</span>${icon}<span class="label"></span>` +
+    (n.kind !== 'folder' && starred().includes(n.key) ? `<span class="star" title="즐겨찾기">${svg('star')}</span>` : '') +
     (n.sync === 'local' ? '' : `<span class="dot ${n.sync}" title="${n.sync === 'synced' ? '동기화됨' : '동기화 대기'}"></span>`)
   ;(row.querySelector('.label') as HTMLElement).append(label(n.label))
   li.append(row)
@@ -126,13 +136,45 @@ function render(): void {
 function build(): void {
   els.tree.replaceChildren()
   if (!data) return
-  const items = query ? data.items.map((n) => narrow(n, query)).filter((n): n is NoteNode => n !== null) : data.items
+  const all = data.items
+  // The bookmarks tab: a flat list of the bookmarked notes that still exist, in bookmark order.
+  const base = tab === 'stars' ? starred().map((k) => find(all, k)).filter((n): n is NoteNode => !!n) : all
+  const items = query ? base.map((n) => narrow(n, query, contentHits)).filter((n): n is NoteNode => n !== null) : base
   if (items.length === 0) {
-    els.tree.innerHTML = `<li class="empty">${query ? '일치하는 노트가 없습니다' : '노트가 없습니다'}</li>`
+    els.tree.innerHTML = `<li class="empty">${query ? '일치하는 노트가 없습니다' : tab === 'stars' ? '즐겨찾기한 노트가 없습니다' : '노트가 없습니다'}</li>`
   } else for (const n of items) els.tree.append(node(n, 0))
-  $<HTMLButtonElement>('delete').disabled = !selected || selected.endsWith('/') || !find(data.items, selected)
+  toolbar()
   els.status.textContent = !data.remote ? '로컬' : data.pending.length ? `대기 ${data.pending.length}` : ''
 }
+
+/** Buttons that act on the selected note. */
+function toolbar(): void {
+  const note = !!selected && !selected.endsWith('/') && !!data && !!find(data.items, selected)
+  $<HTMLButtonElement>('delete').disabled = !note
+  const star = $<HTMLButtonElement>('bookmark')
+  star.disabled = !note
+  star.setAttribute('aria-pressed', String(note && starred().includes(selected)))
+}
+
+function toggleBookmark(): void {
+  if (!selected || selected.endsWith('/')) return
+  const keys = starred()
+  bookmarks = { ...bookmarks, [vault]: keys.includes(selected) ? keys.filter((k) => k !== selected) : [...keys, selected] }
+  void orca.storage.set('bookmarks', bookmarks).catch(() => {})
+  render()
+}
+$('bookmark').addEventListener('click', toggleBookmark)
+
+function showTab(t: typeof tab): void {
+  tab = t
+  $('tab-notes').setAttribute('aria-selected', String(t === 'notes'))
+  $('tab-stars').setAttribute('aria-selected', String(t === 'stars'))
+  $('tools').hidden = t !== 'notes'
+  saveState()
+  render()
+}
+$('tab-notes').addEventListener('click', () => showTab('notes'))
+$('tab-stars').addEventListener('click', () => showTab('stars'))
 
 function showPath(): void {
   // ‎ keeps a leading drive letter on the left of the rtl-truncated line.
@@ -148,6 +190,7 @@ const refresh = () =>
     els.lock.checked = t.locked
     data = t
     render()
+    if (query) searchContent()
   })
 
 async function activate(key: string): Promise<void> {
@@ -188,8 +231,12 @@ document.addEventListener('keydown', (e) => {
     next.focus()
     next.scrollIntoView({ block: 'nearest' })
     selected = next.dataset.key
-    $<HTMLButtonElement>('delete').disabled = selected.endsWith('/')
+    toolbar()
     saveState()
+  }
+  if (row?.dataset.key && (e.key === 'b' || e.key === 'B')) {
+    selected = row.dataset.key
+    toggleBookmark()
   }
   if (row?.dataset.key && e.key === 'Delete') {
     selected = row.dataset.key
@@ -217,14 +264,34 @@ els.lock.addEventListener('change', () =>
   })
 )
 $('refresh').addEventListener('click', () => void refresh())
+/** Searches note text for the current query after typing pauses; names filter at once. */
+function searchContent(): void {
+  clearTimeout(searchTimer)
+  if (!query || !vault) return
+  const q = query
+  searchTimer = window.setTimeout(
+    () =>
+      void guard(async () => {
+        const { keys } = await orca.plugin.request('notes.search', { vault, q })
+        if (q !== query) return // typed on meanwhile
+        contentHits = new Set(keys)
+        render()
+      }),
+    250
+  )
+}
 els.filter.addEventListener('input', () => {
   query = norm(els.filter.value.trim())
+  contentHits = new Set()
+  searchContent()
   render()
 })
 els.filter.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     els.filter.value = ''
     query = ''
+    contentHits = new Set()
+    searchContent()
     render()
   }
 })
@@ -291,6 +358,10 @@ $('confirm').addEventListener('close', () => {
   const path = selected
   void guard(async () => {
     await orca.plugin.request('note.delete', { vault, path })
+    if (starred().includes(path)) {
+      bookmarks = { ...bookmarks, [vault]: starred().filter((k) => k !== path) }
+      void orca.storage.set('bookmarks', bookmarks).catch(() => {})
+    }
     selected = ''
     saveState()
     await refresh()
@@ -349,7 +420,10 @@ void guard(async () => {
     vault?: string
     expanded?: string[]
     selected?: string
+    tab?: typeof tab
   }
+  const b = await orca.storage.get('bookmarks').catch(() => null)
+  if (b && typeof b === 'object') bookmarks = b as typeof bookmarks
   const { vaults, last } = await orca.plugin.request('vaults.list')
   els.vault.replaceChildren(
     ...vaults.map((v: Vault) => Object.assign(document.createElement('option'), { value: v.path, textContent: v.name }))
@@ -364,6 +438,7 @@ void guard(async () => {
     for (const k of saved.expanded ?? []) expanded.add(k)
     selected = saved.selected ?? ''
   }
+  if (saved.tab === 'stars') showTab('stars') // after vault: it saves the state
   els.vault.value = vault
   await refresh()
 })

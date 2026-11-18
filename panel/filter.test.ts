@@ -20,3 +20,8 @@ test('a matching folder keeps everything inside it', () => {
 test('nothing matches: null', () => {
   assert.equal(narrow(tree, norm('없는말')), null)
 })
+
+test('notes whose text matched are kept too', () => {
+  const hit = narrow(tree, norm('없는말'), new Set(['SOM/Readme.md']))
+  assert.deepEqual(hit?.children?.map((c) => c.key), ['SOM/Readme.md'])
+})

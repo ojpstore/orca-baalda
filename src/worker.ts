@@ -162,6 +162,22 @@ export async function tree(vault: string): Promise<Tree> {
   return { items, remote, synced, pending }
 }
 
+/** Vault documents whose text contains `q` (already normalized), in readdir order. */
+// ponytail: reads every document per query; add an index if vaults grow past a few thousand notes.
+export async function search(vault: string, q: string, limit = 500): Promise<string[]> {
+  const norm = (s: string) => s.normalize('NFKC').toLocaleLowerCase()
+  const files = (await readdir(vault, { recursive: true }))
+    .map((f) => slash(String(f)))
+    .filter((f) => isDoc(f) && !f.split('/').some((p) => p.startsWith('.')))
+  const hits: string[] = []
+  for (const f of files) {
+    if (hits.length >= limit) break
+    const text = await readFile(join(vault, f), 'utf8').catch(() => '')
+    if (norm(text).includes(q)) hits.push(f)
+  }
+  return hits
+}
+
 function run(file: string, args: string[]): Promise<string> {
   return new Promise((done, fail) =>
     execFile(file, args, { env: { ...process.env, USERPROFILE: homedir(), APPDATA: appData, LOCALAPPDATA: localAppData } }, (err, out, errOut) =>
@@ -411,6 +427,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     watchVault(orca, v)
     return { ...(await tree(v)), locked: (await locks).has(v) }
   })
+
+  orca.panels.handle('notes.search', async ({ vault, q }) => ({ keys: q ? await search(await vaultDir(vault), q) : [] }))
 
   orca.panels.handle('note.read', async ({ vault, path }) => {
     const v = await vaultDir(vault)

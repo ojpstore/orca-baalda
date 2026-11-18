@@ -56,7 +56,15 @@
       .lock { display: flex; align-items: center; gap: 4px; padding: 0 2px; font-size: 12px; color: var(--orca-muted-foreground); cursor: pointer; }
       .lock input { margin: 0; accent-color: var(--orca-primary); }
       .section { display: flex; align-items: center; gap: 2px; padding: 0 4px 6px; }
-      .section h2 { flex: 1; margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--orca-muted-foreground); }
+      .tools { display: flex; justify-content: flex-end; gap: 2px; padding: 0 4px 6px; }
+      .tools[hidden] { display: none; }
+      .tabs { flex: 1; display: flex; gap: 2px; }
+      .tabs button { width: auto; height: 24px; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; }
+      .tabs button[aria-selected='true'] { background: var(--orca-accent); color: var(--orca-foreground); }
+      #bookmark[aria-pressed='true'] svg, .star svg { fill: currentColor; }
+      #bookmark[aria-pressed='true'], .star { color: var(--dot-pending); }
+      .star { flex: none; display: grid; place-items: center; }
+      .star svg { width: 11px; height: 11px; }
       .status { font-size: 11px; color: var(--orca-muted-foreground); margin-right: 4px; }
       .filter { padding: 0 4px 6px; }
       .filter input {
@@ -136,15 +144,21 @@
       <button id="app" title="Baalda 앱 창 열기" aria-label="Baalda 앱 창 열기"></button>
     </div>
     <div class="section">
-      <h2>NOTES</h2>
+      <div class="tabs" role="tablist">
+        <button id="tab-notes" role="tab" aria-selected="true">NOTES</button>
+        <button id="tab-stars" role="tab" aria-selected="false">즐겨찾기</button>
+      </div>
       <span class="status" id="status"></span>
+    </div>
+    <div class="tools" id="tools">
       <button id="new-note" title="새 노트" aria-label="새 노트"></button>
       <button id="new-folder" title="새 폴더" aria-label="새 폴더"></button>
+      <button id="bookmark" title="즐겨찾기 추가/해제 (B)" aria-label="즐겨찾기 추가/해제" aria-pressed="false" disabled></button>
       <button id="delete" title="선택한 노트 삭제" aria-label="선택한 노트 삭제" disabled></button>
       <button id="collapse" title="모두 접기" aria-label="모두 접기"></button>
     </div>
     <div class="filter">
-      <input id="filter" type="search" aria-label="노트 필터" placeholder="노트 필터" autocomplete="off" spellcheck="false" />
+      <input id="filter" type="search" aria-label="노트 필터 (이름·내용)" placeholder="노트 필터 (이름·내용)" autocomplete="off" spellcheck="false" />
     </div>
     <form class="create" id="create" hidden>
       <input id="name" aria-label="이름" autocomplete="off" />
