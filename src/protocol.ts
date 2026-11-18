@@ -66,6 +66,6 @@ declare module 'orca' {
     /** The vault's lock checkbox changed. */
     'vault.locked': { vault: string; locked: boolean }
     /** Progress of the sync button's run. */
-    'sync.status': { vault: string; state: SyncState; message: string }
+    'sync.status': { vault: string; state: SyncState; message: string; server: string }
   }
 }

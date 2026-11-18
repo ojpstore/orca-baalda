@@ -36,7 +36,7 @@ async function activeWorkspace(orca: OrcaWorkerApi): Promise<string> {
   return resolve(ws.path)
 }
 
-type BaaldaConfig = { last_vault?: string; vaults_root?: string; recent_vaults?: Vault[] }
+type BaaldaConfig = { server_url?: string; last_vault?: string; vaults_root?: string; recent_vaults?: Vault[] }
 type VaultMeta = { serverVaultId?: string; docs?: Record<string, string>; pushed?: string[] }
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -505,7 +505,9 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   /** Bumped by "앱 창 열기": the person took the app over, so a pending auto-close is dropped. */
   let syncRun = 0
-  const status = (vault: string, state: SyncState, message: string) => orca.panels.post('sync.status', { vault, state, message })
+  let server = ''
+  const status = (vault: string, state: SyncState, message: string) =>
+    orca.panels.post('sync.status', { vault, state, message, server })
 
   /**
    * Baalda pushes on its own once running; nothing says "done". Treat it as done when it has
@@ -550,6 +552,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (await baaldaRunning()) return { started: false, running: true }
     if (!existsSync(paths.app)) throw new Error(`Baalda 앱을 찾을 수 없습니다: ${paths.app}`)
     const run = ++syncRun
+    server = (await readJson<BaaldaConfig>(paths.config))?.server_url ?? '서버'
     const logStart = (await stat(paths.log).catch(() => null))?.size ?? 0
     status(v, 'syncing', '동기화 중…')
     orca.log(`sync: starting Baalda hidden for ${v}`)

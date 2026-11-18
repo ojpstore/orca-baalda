@@ -419,7 +419,7 @@ orca.plugin.on('sync.status', (p) => {
   const btn = $<HTMLButtonElement>('sync')
   btn.disabled = p.state === 'syncing'
   btn.title = p.message
-  els.status.textContent = p.state === 'syncing' ? '동기화 중' : ''
+  els.status.textContent = p.state === 'syncing' ? `"${p.server}"에 동기화` : ''
   if (p.state !== 'syncing') void refresh()
   if (p.state === 'timeout') {
     els.error.textContent = p.message
