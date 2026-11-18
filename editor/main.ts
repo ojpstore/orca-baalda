@@ -82,8 +82,9 @@ function show(): void {
   page.hidden = editing || !isPage(target)
   view.hidden = editing || isPage(target)
   if (!target) view.innerHTML = '<p class="empty">Baalda 패널에서 노트를 선택하세요</p>'
-  else if (editing) return
-  else if (isPage(target)) page.srcdoc = withSdk(text) // HTML page (dashboard): sandboxed, own origin
+  else if (editing) {
+    // the textarea shows the source
+  } else if (isPage(target)) page.srcdoc = withSdk(text) // HTML page (dashboard): sandboxed, own origin
   else {
     view.innerHTML = render(text)
     for (const pre of Array.from(view.querySelectorAll('pre'))) {
@@ -96,7 +97,94 @@ function show(): void {
       wrap.append(pre, b)
     }
   }
+  if (!find.hidden) step(0)
 }
+
+// Ctrl+F: find in the note. The view highlights hits without touching the DOM; the editor selects them.
+const find = document.getElementById('find') as HTMLElement
+const findInput = find.querySelector('input') as HTMLInputElement
+const findCount = find.querySelector('.count') as HTMLElement
+let found: (Range | number)[] = []
+/** The DOM lib types the registry without its Map methods. */
+const marks = CSS.highlights as unknown as Map<string, Highlight>
+let at = 0
+
+// ponytail: a hit split across formatting (e.g. half **bold**) isn't found in the view; join text nodes if it matters.
+function scan(): void {
+  const q = findInput.value.toLowerCase()
+  found = []
+  marks.clear()
+  if (!q) return
+  if (editing) {
+    const v = source.value.toLowerCase()
+    for (let i = v.indexOf(q); i >= 0; i = v.indexOf(q, i + q.length)) found.push(i)
+    return
+  }
+  if (view.hidden) return // HTML pages are a sandboxed frame
+  const walk = document.createTreeWalker(view, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement?.closest('button') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT)
+  })
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    const v = n.nodeValue!.toLowerCase()
+    for (let i = v.indexOf(q); i >= 0; i = v.indexOf(q, i + q.length)) {
+      const r = new Range()
+      r.setStart(n, i)
+      r.setEnd(n, i + q.length)
+      found.push(r)
+    }
+  }
+  marks.set('find', new Highlight(...(found as Range[])))
+}
+
+/** Searches again (the note may have changed) and moves `d` hits from the current one. */
+function step(d: number): void {
+  scan()
+  if (!found.length) {
+    findCount.textContent = findInput.value ? '0/0' : ''
+    return
+  }
+  at = (((at + d) % found.length) + found.length) % found.length
+  findCount.textContent = `${at + 1}/${found.length}`
+  const h = found[at]
+  if (typeof h === 'number') {
+    source.setSelectionRange(h, h + findInput.value.length)
+    source.focus() // scrolls the textarea to the selection
+    findInput.focus()
+  } else {
+    marks.set('find-now', new Highlight(h))
+    h.startContainer.parentElement?.scrollIntoView({ block: 'center' })
+  }
+}
+
+function openFind(): void {
+  find.hidden = false
+  findInput.focus()
+  findInput.select()
+  step(0)
+}
+
+function closeFind(): void {
+  find.hidden = true
+  marks.clear()
+  if (editing) source.focus() // lands on the current hit, still selected
+}
+
+findInput.addEventListener('input', () => {
+  at = 0
+  step(0)
+})
+findInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') step(e.shiftKey ? -1 : 1)
+  if (e.key === 'Escape') {
+    e.stopPropagation()
+    closeFind()
+  }
+})
+find.addEventListener('mousedown', (e) => e.target !== findInput && e.preventDefault())
+find.addEventListener('click', (e) => {
+  const d = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.d
+  if (d) (d === '0' ? closeFind() : step(Number(d)))
+})
 
 /** The sandboxed tab may be denied the async clipboard: fall back to a selection copy. */
 async function copy(s: string): Promise<boolean> {
@@ -432,6 +520,10 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     e.preventDefault()
     void save()
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f' && (editing || !isPage(target))) {
+    e.preventDefault()
+    openFind()
   }
   if (e.key === 'Escape' && !emoji.hidden) {
     toggleEmoji(false)

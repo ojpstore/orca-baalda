@@ -126,11 +126,19 @@
       ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
       ::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 5px; background: color-mix(in srgb, var(--orca-foreground) 75%, transparent) padding-box; }
       ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--orca-foreground) 90%, transparent) padding-box; }
+      #find { display: flex; align-items: center; gap: 2px; }
+      #find input { width: 180px; height: 28px; padding: 0 8px; border: 1px solid var(--orca-input); border-radius: 6px; background: var(--orca-background); color: var(--orca-foreground); font: 13px system-ui, sans-serif; }
+      #find input:focus-visible { outline: 2px solid var(--orca-ring); outline-offset: -1px; }
+      #find .count { min-width: 44px; padding: 0 4px; font-size: 12px; color: var(--orca-muted-foreground); text-align: center; }
+      .bar #find button { width: 28px; padding: 0; border: 0; background: none; color: var(--orca-foreground); }
+      .bar #find button:hover { background: var(--orca-muted); }
+      ::highlight(find) { background: rgb(255 200 0 / 0.35); }
+      ::highlight(find-now) { background: rgb(255 140 0 / 0.85); color: #000; }
       [hidden] { display: none !important; }
     </style>
   </head>
   <body>
-    <div class="bar"><strong id="title"></strong><span id="state"></span><button id="mode" hidden>편집</button></div>
+    <div class="bar"><strong id="title"></strong><span id="state"></span><div id="find" role="search" hidden><input type="search" placeholder="찾기" aria-label="노트에서 찾기" spellcheck="false" /><span class="count" aria-live="polite"></span><button data-d="-1" title="이전 (Shift+Enter)" aria-label="이전">↑</button><button data-d="1" title="다음 (Enter)" aria-label="다음">↓</button><button data-d="0" title="닫기 (Esc)" aria-label="닫기">✕</button></div><button id="mode" hidden>편집</button></div>
     <div id="tools" role="toolbar" aria-label="Markdown 서식" hidden>
       <button data-t="h1" title="제목 1">H1</button>
       <button data-t="h2" title="제목 2">H2</button>
