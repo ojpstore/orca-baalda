@@ -12,6 +12,7 @@ const ICONS = {
   star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>',
   collapse: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
+  expand: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
   openApp: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -154,6 +155,11 @@ function toolbar(): void {
   const star = $<HTMLButtonElement>('bookmark')
   star.disabled = !note
   star.setAttribute('aria-pressed', String(note && starred().includes(selected)))
+  const fold = $<HTMLButtonElement>('collapse')
+  const any = expanded.size > 0
+  fold.innerHTML = svg(any ? 'collapse' : 'expand')
+  fold.title = any ? '모두 접기' : '모두 펼치기'
+  fold.setAttribute('aria-label', fold.title)
 }
 
 function toggleBookmark(): void {
@@ -309,8 +315,18 @@ $('sync').addEventListener('click', () =>
   })
 )
 $('app').addEventListener('click', () => guard(async () => void (await orca.plugin.request('app.show'))))
+// Toggle: anything open collapses all, nothing open expands every folder.
 $('collapse').addEventListener('click', () => {
-  expanded.clear()
+  if (expanded.size) expanded.clear()
+  else {
+    const add = (ns: NoteNode[]): void => {
+      for (const n of ns) if (n.kind === 'folder') {
+        expanded.add(n.key)
+        add(n.children ?? [])
+      }
+    }
+    add(data?.items ?? [])
+  }
   saveState()
   render()
 })
