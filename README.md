@@ -24,4 +24,5 @@ npx tsc -p .
 orca plugin test .       # 주의: 플러그인이 Orca 설치 드라이브(C:)와 다른 드라이브에 있으면
 orca plugin check .      # 테스트 런타임을 못 찾음 → C: 아래로 복사해서 실행
 orca plugin dev load . --approve <fingerprint>
+node editor/vendor/emoji.gen.mjs  # 이모지 데이터(emojibase-data, 한국어) 재생성
 ```

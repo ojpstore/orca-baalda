@@ -2,6 +2,7 @@
 // clicked note; the note itself is read and written through the worker. Baalda's desktop app
 // syncs the note from disk.
 import { marked } from './vendor/marked.js'
+import { GROUPS } from './vendor/emoji.js'
 import type {} from '../src/protocol'
 
 const title = document.getElementById('title') as HTMLElement
@@ -10,6 +11,9 @@ const source = document.getElementById('source') as HTMLTextAreaElement
 const mode = document.getElementById('mode') as HTMLButtonElement
 const state = document.getElementById('state') as HTMLElement
 const page = document.getElementById('page') as HTMLIFrameElement
+const tools = document.getElementById('tools') as HTMLElement
+const emoji = document.getElementById('emoji') as HTMLElement
+const emojiBtn = tools.querySelector('[data-t="emoji"]') as HTMLButtonElement
 
 const escape = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -165,13 +169,35 @@ view.addEventListener('click', (e) => {
   if (a.dataset.target) goto(a.dataset.target)
 })
 
-async function save(): Promise<void> {
+/**
+ * Orca refuses a frame request over 65,560 UTF-8 bytes ("message too large"), so long notes go in
+ * parts. A UTF-16 unit is at most 3 bytes, so 16k units stay well under the cap with the path.
+ */
+const PART = 16_000
+async function write(t: Target, all: string): Promise<void> {
+  for (let offset = 0; ; ) {
+    let end = Math.min(offset + PART, all.length)
+    if (end < all.length && /[\uD800-\uDBFF]/.test(all[end - 1])) end-- // keep surrogate pairs whole
+    const more = end < all.length
+    await orca.plugin.request('note.write', { ...t, text: all.slice(offset, end), offset, more })
+    if (!more) return
+    offset = end
+  }
+}
+
+// One save at a time: a write is several requests now, and two must not interleave their parts.
+let saving = Promise.resolve()
+function save(): Promise<void> {
   clearTimeout(timer)
+  return (saving = saving.then(saveNow))
+}
+
+async function saveNow(): Promise<void> {
   if (!target || !dirty) return
   dirty = false
   state.textContent = '저장 중…'
   try {
-    await orca.plugin.request('note.write', { ...target, text })
+    await write(target, text)
     state.textContent = '저장됨'
   } catch (e) {
     dirty = true
@@ -192,10 +218,192 @@ async function load(next: Target | null): Promise<void> {
   show()
 }
 
+/** Replaces the selection through the editing command, so Ctrl+Z undoes it and `input` autosaves. */
+function insert(t: string): void {
+  source.focus()
+  if (!document.execCommand('insertText', false, t)) {
+    source.setRangeText(t, source.selectionStart, source.selectionEnd, 'end')
+    source.dispatchEvent(new Event('input'))
+  }
+}
+
+function wrap(before: string, after = before, placeholder = '텍스트'): void {
+  const { selectionStart: s, selectionEnd: e, value } = source
+  const sel = value.slice(s, e) || placeholder
+  insert(before + sel + after)
+  source.setSelectionRange(s + before.length, s + before.length + sel.length)
+}
+
+/** Toggles a prefix on every selected line; a heading replaces any other heading level. */
+function prefix(p: string): void {
+  const { selectionStart: s, value } = source
+  const e = source.selectionEnd > s && value[source.selectionEnd - 1] === '\n' ? source.selectionEnd - 1 : source.selectionEnd
+  const start = value.lastIndexOf('\n', s - 1) + 1
+  const stop = value.indexOf('\n', e)
+  const end = stop < 0 ? value.length : stop
+  const lines = value.slice(start, end).split('\n')
+  const on = lines.every((l) => l.startsWith(p))
+  const out = lines.map((l) => (on ? l.slice(p.length) : p + (p[0] === '#' ? l.replace(/^#{1,6} /, '') : l))).join('\n')
+  source.setSelectionRange(start, end)
+  insert(out)
+  source.setSelectionRange(start, start + out.length)
+}
+
+/** A newline when the cursor is mid-line, so a block starts on its own line. */
+const nl = () => (source.selectionStart > 0 && source.value[source.selectionStart - 1] !== '\n' ? '\n' : '')
+const block = (t: string) => insert(nl() + t)
+
+const TOOLS: Record<string, () => void> = {
+  h1: () => prefix('# '),
+  h2: () => prefix('## '),
+  h3: () => prefix('### '),
+  bold: () => wrap('**'),
+  italic: () => wrap('*'),
+  strike: () => wrap('~~'),
+  code: () => wrap('`', '`', 'code'),
+  link: () => wrap('[', '](https://)', '링크'),
+  ul: () => prefix('- '),
+  ol: () => prefix('1. '),
+  task: () => prefix('- [ ] '),
+  quote: () => prefix('> '),
+  block: () => wrap(nl() + '```\n', '\n```\n', ''),
+  table: () => block('| 열 1 | 열 2 |\n| --- | --- |\n|  |  |\n'),
+  hr: () => block('\n---\n'),
+  emoji: () => toggleEmoji(emoji.hidden)
+}
+
+const groups = GROUPS.map(([name, icon, lines]) => ({
+  name,
+  icon,
+  list: lines.split('\n').map((l) => {
+    const [ch, label, ...tags] = l.split('\t')
+    return { ch, label, search: [label, ...tags].join(' ').toLowerCase() }
+  })
+}))
+const everyEmoji = groups.flatMap((g) => g.list)
+const labelOf = new Map(everyEmoji.map((e) => [e.ch, e.label]))
+
+const DEFAULT = '📌 ⭐ ✅ ❌ ⚠️ ❗ ❓ 💡 🔥 🚀 🎯 🏆 📝 📅 ⏰ 📎 🔗 📁 📊 💻 🐛 🔧 🔒 🔑 💰 🏠 ✈️ 🍀 🎉 ❤️ 👍 👀 🙂 😂 😢 😡 🤔 🙏 💪'.split(' ')
+const USED = 'baalda.emoji.used'
+// Per-viewer convenience only: blocked storage just means the defaults.
+function used(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(USED) ?? '{}') as Record<string, number>
+  } catch {
+    return {}
+  }
+}
+function remember(ch: string): void {
+  const u = used()
+  u[ch] = (u[ch] ?? 0) + 1
+  try {
+    localStorage.setItem(USED, JSON.stringify(u))
+  } catch {
+    // storage blocked
+  }
+}
+function frequent(): string[] {
+  const u = used()
+  return [...new Set([...Object.keys(u).sort((a, b) => u[b] - u[a]), ...DEFAULT])].slice(0, 40)
+}
+
+const search = emoji.querySelector('input') as HTMLInputElement
+const tabs = emoji.querySelector('.tabs') as HTMLElement
+const list = emoji.querySelector('.list') as HTMLElement
+const [big, name] = Array.from(emoji.querySelectorAll<HTMLElement>('.preview span'))
+const IDLE: [string, string] = ['😊', '기분이 어떠세요?']
+
+tabs.innerHTML = [['자주 사용', '🕒'], ...groups.map((g) => [g.name, g.icon])]
+  .map(([n, i]) => `<button title="${n}" aria-label="${n}">${i}</button>`)
+  .join('')
+
+const section = (title: string, chars: string[]) =>
+  `<h4>${title}</h4><div class="grid">${chars.map((c) => `<button aria-label="${escape(labelOf.get(c) ?? c)}">${c}</button>`).join('')}</div>`
+
+function fill(): void {
+  const q = search.value.trim().toLowerCase()
+  const hits = q ? everyEmoji.filter((e) => e.search.includes(q)).map((e) => e.ch) : []
+  list.innerHTML = !q
+    ? section('자주 사용', frequent()) + groups.map((g) => section(g.name, g.list.map((e) => e.ch))).join('')
+    : hits.length ? section('검색 결과', hits) : '<p class="none">검색 결과가 없습니다</p>'
+  list.scrollTop = 0
+  setTab(q ? -1 : 0)
+}
+
+function setTab(i: number): void {
+  tabs.querySelectorAll('button').forEach((b, j) => b.classList.toggle('on', i === j))
+}
+
+function setPreview([ch, label]: [string, string]): void {
+  big.textContent = ch
+  name.textContent = label
+}
+
+function toggleEmoji(open: boolean): void {
+  if (open === !emoji.hidden) return
+  emoji.hidden = !open
+  emojiBtn.setAttribute('aria-expanded', String(open))
+  if (!open) return
+  const r = emojiBtn.getBoundingClientRect()
+  emoji.style.top = `${tools.getBoundingClientRect().bottom + 4}px`
+  emoji.style.left = `${Math.max(8, Math.min(r.left, innerWidth - emoji.offsetWidth - 8))}px`
+  search.value = ''
+  setPreview(IDLE)
+  fill()
+  search.focus()
+}
+
+search.addEventListener('input', fill)
+search.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') list.querySelector<HTMLButtonElement>('.grid button')?.click()
+})
+tabs.addEventListener('mousedown', (e) => e.preventDefault())
+tabs.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest('button')
+  if (!b) return
+  const i = Array.from(tabs.children).indexOf(b)
+  if (search.value) {
+    search.value = ''
+    fill()
+  }
+  list.scrollTop = list.querySelectorAll('h4')[i].offsetTop
+})
+list.addEventListener('scroll', () => {
+  if (search.value.trim()) return
+  let i = 0
+  list.querySelectorAll('h4').forEach((h, j) => h.offsetTop <= list.scrollTop + 8 && (i = j))
+  setTab(i)
+})
+list.addEventListener('mouseover', (e) => {
+  const ch = (e.target as HTMLElement).closest('.grid button')?.textContent
+  if (ch) setPreview([ch, labelOf.get(ch) ?? ''])
+})
+list.addEventListener('mouseleave', () => setPreview(IDLE))
+// Picking keeps the picker open for more; the toolbar button, Escape or a click outside closes it.
+list.addEventListener('mousedown', (e) => e.preventDefault())
+list.addEventListener('click', (e) => {
+  const ch = (e.target as HTMLElement).closest('.grid button')?.textContent
+  if (!ch) return
+  insert(ch)
+  remember(ch)
+})
+document.addEventListener('mousedown', (e) => {
+  const t = e.target as Node
+  if (!emoji.hidden && !emoji.contains(t) && !emojiBtn.contains(t)) toggleEmoji(false)
+})
+
+tools.addEventListener('mousedown', (e) => e.preventDefault()) // keep the textarea's selection
+tools.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.t
+  if (t) TOOLS[t]?.()
+})
+
 mode.addEventListener('click', () => {
   editing = !editing
   mode.textContent = editing ? '보기' : '편집'
   source.hidden = !editing
+  tools.hidden = !editing
+  toggleEmoji(false)
   if (editing) {
     source.value = text
     source.focus()
@@ -214,6 +422,15 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     e.preventDefault()
     void save()
+  }
+  if (e.key === 'Escape' && !emoji.hidden) {
+    toggleEmoji(false)
+    source.focus()
+  }
+  const key = editing && !e.shiftKey && !e.altKey && (e.ctrlKey || e.metaKey) && { b: 'bold', i: 'italic', k: 'link' }[e.key.toLowerCase()]
+  if (key) {
+    e.preventDefault()
+    TOOLS[key]()
   }
 })
 

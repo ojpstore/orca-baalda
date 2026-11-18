@@ -58,11 +58,94 @@
         color: var(--orca-foreground);
         font: 14px/1.7 ui-monospace, Consolas, monospace;
       }
+      #tools { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 8px; border-bottom: 1px solid var(--orca-border); }
+      #tools button {
+        min-width: 28px;
+        height: 26px;
+        padding: 0 6px;
+        border: 0;
+        border-radius: 5px;
+        background: none;
+        color: var(--orca-foreground);
+        font: 13px system-ui, sans-serif;
+        cursor: pointer;
+      }
+      #tools button:hover { background: var(--orca-muted); }
+      #tools button:focus-visible { outline: 2px solid var(--orca-ring); outline-offset: -2px; }
+      #tools .sep { width: 1px; margin: 4px 4px; background: var(--orca-border); }
+      #emoji {
+        position: fixed;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        width: 360px;
+        max-width: calc(100vw - 16px);
+        border: 1px solid var(--orca-border);
+        border-radius: 10px;
+        background: var(--orca-popover, var(--orca-card));
+        color: var(--orca-foreground);
+        box-shadow: 0 8px 28px rgb(0 0 0 / 0.35);
+        overflow: hidden;
+      }
+      #emoji .search { padding: 10px 10px 6px; }
+      #emoji input {
+        width: 100%;
+        height: 34px;
+        padding: 0 10px;
+        border: 1px solid var(--orca-input);
+        border-radius: 8px;
+        background: var(--orca-background);
+        color: var(--orca-foreground);
+        font: 13px system-ui, sans-serif;
+      }
+      #emoji input:focus-visible { outline: 2px solid var(--orca-ring); outline-offset: -1px; }
+      #emoji button { font-family: 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif; cursor: pointer; }
+      #emoji button:focus-visible { outline: 2px solid var(--orca-ring); outline-offset: -2px; }
+      #emoji .tabs { display: flex; padding: 0 6px; border-bottom: 1px solid var(--orca-border); }
+      #emoji .tabs button { flex: 1; height: 34px; border: 0; border-bottom: 2px solid transparent; background: none; font-size: 16px; filter: grayscale(1); opacity: 0.6; }
+      #emoji .tabs button:hover { opacity: 1; }
+      #emoji .tabs button.on { border-bottom-color: var(--orca-primary); filter: none; opacity: 1; }
+      #emoji .list { position: relative; height: 270px; overflow-y: auto; padding: 0 8px 8px; }
+      #emoji h4 { margin: 10px 2px 4px; font: 700 13px system-ui, sans-serif; }
+      #emoji .grid { display: grid; grid-template-columns: repeat(auto-fill, 36px); gap: 2px; }
+      #emoji .grid button { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 6px; background: none; font-size: 22px; line-height: 1; }
+      #emoji .grid button:hover { background: var(--orca-muted); }
+      #emoji .none { margin: 16px 4px; color: var(--orca-muted-foreground); font-size: 13px; }
+      #emoji .preview { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 14px; border-top: 1px solid var(--orca-border); font-size: 13px; }
+      #emoji .preview .big { font: 28px/1 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif; }
       [hidden] { display: none !important; }
     </style>
   </head>
   <body>
     <div class="bar"><strong id="title"></strong><span id="state"></span><button id="mode" hidden>편집</button></div>
+    <div id="tools" role="toolbar" aria-label="Markdown 서식" hidden>
+      <button data-t="h1" title="제목 1">H1</button>
+      <button data-t="h2" title="제목 2">H2</button>
+      <button data-t="h3" title="제목 3">H3</button>
+      <span class="sep"></span>
+      <button data-t="bold" title="굵게 (Ctrl+B)"><b>B</b></button>
+      <button data-t="italic" title="기울임 (Ctrl+I)"><i>I</i></button>
+      <button data-t="strike" title="취소선"><s>S</s></button>
+      <button data-t="code" title="인라인 코드">&lt;/&gt;</button>
+      <button data-t="link" title="링크 (Ctrl+K)">🔗</button>
+      <span class="sep"></span>
+      <button data-t="ul" title="글머리 목록">•</button>
+      <button data-t="ol" title="번호 목록">1.</button>
+      <button data-t="task" title="체크리스트">☐</button>
+      <button data-t="quote" title="인용">❝</button>
+      <span class="sep"></span>
+      <button data-t="block" title="코드 블록">{ }</button>
+      <button data-t="table" title="표">▦</button>
+      <button data-t="hr" title="구분선">―</button>
+      <span class="sep"></span>
+      <button data-t="emoji" title="이모지" aria-expanded="false" aria-controls="emoji">😀</button>
+    </div>
+    <div id="emoji" role="dialog" aria-label="이모지" hidden>
+      <div class="search"><input type="search" placeholder="이모지 검색" aria-label="이모지 검색" spellcheck="false" /></div>
+      <div class="tabs"></div>
+      <div class="list"></div>
+      <div class="preview"><span class="big"></span><span class="name"></span></div>
+    </div>
     <main>
       <article id="view"></article>
       <iframe id="page" title="페이지" sandbox="allow-scripts allow-popups" hidden></iframe>
