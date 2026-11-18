@@ -39,7 +39,9 @@ speak.addEventListener('click', () => {
     return setReading(false)
   }
   view.classList.add('tts') // leave out copy buttons and properties
-  const text = view.innerText.split('\n').map((l) => l.trim()).filter(Boolean).join('\n')
+  const text = view.innerText
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}‍️⃣]/gu, '')
+    .split('\n').map((l) => l.trim()).filter(Boolean).join('\n')
   view.classList.remove('tts')
   if (!text) return
   setReading(true)
