@@ -35,7 +35,14 @@ declare module 'orca' {
     /** Follows a [[wikilink]] or relative link from note `from`; answers the path it opened. */
     'note.goto': { input: { vault: string; from: string; target: string }; output: { path: string } }
     'note.read': { input: { vault: string; path: string }; output: { text: string } }
-    'note.write': { input: { vault: string; path: string; text: string }; output: { ok: true } }
+    /**
+     * Orca caps a frame's request at 65,560 UTF-8 bytes, so the editor sends long notes in parts:
+     * `offset` is how much text came before (0 starts over), `more` holds the write for the rest.
+     */
+    'note.write': {
+      input: { vault: string; path: string; text: string; offset?: number; more?: boolean }
+      output: { ok: true }
+    }
     'note.create': {
       input: { vault: string; folder: string; name: string; kind: 'note' | 'folder' }
       output: { path: string }

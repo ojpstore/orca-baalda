@@ -43,6 +43,12 @@ test('lists vaults, builds the tree with sync status, reads, writes and creates 
   assert.equal((await worker.request('note.read', { vault, path: 'Welcome.md' })).text, '# Hi')
   await worker.request('note.write', { vault, path: 'Welcome.md', text: 'edited' })
   assert.equal(readFileSync(join(vault, 'Welcome.md'), 'utf8'), 'edited')
+  // A long note arrives in parts and lands only with the last one.
+  await worker.request('note.write', { vault, path: 'Welcome.md', text: '가나', more: true })
+  assert.equal(readFileSync(join(vault, 'Welcome.md'), 'utf8'), 'edited')
+  await worker.request('note.write', { vault, path: 'Welcome.md', text: '다', offset: 2 })
+  assert.equal(readFileSync(join(vault, 'Welcome.md'), 'utf8'), '가나다')
+  await assert.rejects(worker.request('note.write', { vault, path: 'Welcome.md', text: 'x', offset: 5 }))
 
   const made = await worker.request('note.create', { vault, folder: 'Concepts/', name: 'B', kind: 'note' })
   assert.equal(made.path, 'Concepts/B.md')

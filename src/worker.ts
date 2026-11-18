@@ -430,10 +430,16 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { path }
   })
 
-  orca.panels.handle('note.write', async ({ vault, path, text }) => {
+  // Parts of a long note not written yet, by file.
+  const parts = new Map<string, string>()
+  orca.panels.handle('note.write', async ({ vault, path, text, offset = 0, more = false }) => {
     const v = await vaultDir(vault)
     const file = docFile(v, path)
-    await writeFile(file, text, 'utf8')
+    const before = offset ? parts.get(file) : ''
+    parts.delete(file)
+    if (before?.length !== offset) throw new Error('Note write parts arrived out of order; save again')
+    if (more) parts.set(file, before + text)
+    else await writeFile(file, before + text, 'utf8')
     return { ok: true as const }
   })
 
