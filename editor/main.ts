@@ -13,6 +13,11 @@ const state = document.getElementById('state') as HTMLElement
 const page = document.getElementById('page') as HTMLIFrameElement
 const tools = document.getElementById('tools') as HTMLElement
 const emoji = document.getElementById('emoji') as HTMLElement
+const main = document.querySelector('main') as HTMLElement
+const top = document.getElementById('top') as HTMLButtonElement
+
+main.addEventListener('scroll', () => (top.hidden = main.scrollTop < 200), { passive: true })
+top.addEventListener('click', () => main.scrollTo({ top: 0, behavior: 'smooth' }))
 const emojiBtn = tools.querySelector('[data-t="emoji"]') as HTMLButtonElement
 
 const escape = (s: string) =>
