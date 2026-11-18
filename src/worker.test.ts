@@ -41,6 +41,13 @@ test('lists vaults, builds the tree with sync status, reads, writes and creates 
   assert.deepEqual(t.items.map((i) => i.sync), ['pending', 'synced', 'synced']) // a folder is pending if any note in it is
 
   assert.equal((await worker.request('note.read', { vault, path: 'Welcome.md' })).text, '# Hi')
+  // Locking a vault reaches the tree and the editor's read; unlocking clears it.
+  assert.equal(t.locked, false)
+  await worker.request('vault.lock', { vault, locked: true })
+  assert.equal((await worker.request('notes.tree', { vault })).locked, true)
+  assert.equal((await worker.request('note.read', { vault, path: 'Welcome.md' })).locked, true)
+  await worker.request('vault.lock', { vault, locked: false })
+  assert.equal((await worker.request('note.read', { vault, path: 'Welcome.md' })).locked, false)
   await worker.request('note.write', { vault, path: 'Welcome.md', text: 'edited' })
   assert.equal(readFileSync(join(vault, 'Welcome.md'), 'utf8'), 'edited')
   // A long note arrives in parts and lands only with the last one.

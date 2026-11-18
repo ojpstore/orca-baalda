@@ -55,6 +55,8 @@ type Target = { vault: string; path: string }
 let target: Target | null = null
 let text = ''
 let editing = false
+/** The vault is locked in the panel: no edit button. */
+let locked = false
 let dirty = false
 let timer: ReturnType<typeof setTimeout> | undefined
 
@@ -71,7 +73,7 @@ const isPage = (t: Target | null) => !!t && /\.html?$/i.test(t.path)
 
 function show(): void {
   title.textContent = target ? target.path.slice(target.path.lastIndexOf('/') + 1).replace(/\.(md|html?)$/i, '') : ''
-  mode.hidden = !target
+  mode.hidden = !target || locked
   page.hidden = editing || !isPage(target)
   view.hidden = editing || isPage(target)
   if (!target) view.innerHTML = '<p class="empty">Baalda 패널에서 노트를 선택하세요</p>'
@@ -209,10 +211,12 @@ let loads = 0
 async function load(next: Target | null): Promise<void> {
   const mine = ++loads
   await save() // never drop edits to the previous note
-  const body = next ? (await orca.plugin.request('note.read', next)).text : ''
+  const read = next ? await orca.plugin.request('note.read', next) : { text: '', locked: false }
   if (mine !== loads) return // a later click won while this read was in flight
   target = next
-  text = body
+  text = read.text
+  locked = read.locked
+  if (locked && editing) setEditing(false)
   state.textContent = ''
   if (editing) source.value = text
   show()
@@ -398,8 +402,8 @@ tools.addEventListener('click', (e) => {
   if (t) TOOLS[t]?.()
 })
 
-mode.addEventListener('click', () => {
-  editing = !editing
+function setEditing(on: boolean): void {
+  editing = on
   mode.textContent = editing ? '보기' : '편집'
   source.hidden = !editing
   tools.hidden = !editing
@@ -410,7 +414,8 @@ mode.addEventListener('click', () => {
   }
   if (!editing) void save()
   show()
-})
+}
+mode.addEventListener('click', () => setEditing(!editing))
 source.addEventListener('input', () => {
   text = source.value
   dirty = true
@@ -432,6 +437,14 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault()
     TOOLS[key]()
   }
+})
+
+// Locking the vault mid-edit saves what was typed and goes back to the view.
+orca.plugin.on('vault.locked', (p) => {
+  if (!target || p.vault !== target.vault) return
+  locked = p.locked
+  if (locked && editing) setEditing(false)
+  else show()
 })
 
 // The note changed on disk (Baalda sync, another editor): reload unless the user is typing.

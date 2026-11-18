@@ -53,6 +53,8 @@
         color: var(--orca-foreground);
         font: inherit;
       }
+      .lock { display: flex; align-items: center; gap: 4px; padding: 0 2px; font-size: 12px; color: var(--orca-muted-foreground); cursor: pointer; }
+      .lock input { margin: 0; accent-color: var(--orca-primary); }
       .section { display: flex; align-items: center; gap: 2px; padding: 0 4px 6px; }
       .section h2 { flex: 1; margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--orca-muted-foreground); }
       .status { font-size: 11px; color: var(--orca-muted-foreground); margin-right: 4px; }
@@ -128,6 +130,7 @@
     </div>
     <div class="top">
       <select id="vault" aria-label="볼트"></select>
+      <label class="lock" title="잠금: 이 볼트의 노트를 편집할 수 없게 합니다"><input type="checkbox" id="lock" />잠금</label>
       <button id="refresh" title="새로고침" aria-label="새로고침"></button>
       <button id="sync" title="동기화 (Baalda를 창 없이 실행, 업로드가 끝나면 종료)" aria-label="Baalda 동기화"></button>
       <button id="app" title="Baalda 앱 창 열기" aria-label="Baalda 앱 창 열기"></button>

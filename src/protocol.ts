@@ -29,12 +29,14 @@ declare module 'orca' {
     'vault.add': { input: { path: string }; output: Vault }
     /** Shows a folder dialog; adds and answers the chosen vault, or null when cancelled. */
     'vault.pick': { input: { initial: string }; output: { vault: Vault | null } }
-    'notes.tree': { input: { vault: string }; output: Tree }
+    /** `locked`: the vault is read-only here (its notes show no edit button). */
+    'notes.tree': { input: { vault: string }; output: Tree & { locked: boolean } }
+    'vault.lock': { input: { vault: string; locked: boolean }; output: { ok: true } }
     /** Opens the note in a main-area editor tab. */
     'note.open': { input: { vault: string; path: string }; output: { ok: true } }
     /** Follows a [[wikilink]] or relative link from note `from`; answers the path it opened. */
     'note.goto': { input: { vault: string; from: string; target: string }; output: { path: string } }
-    'note.read': { input: { vault: string; path: string }; output: { text: string } }
+    'note.read': { input: { vault: string; path: string }; output: { text: string; locked: boolean } }
     /**
      * Orca caps a frame's request at 65,560 UTF-8 bytes, so the editor sends long notes in parts:
      * `offset` is how much text came before (0 starts over), `more` holds the write for the rest.
@@ -59,6 +61,8 @@ declare module 'orca' {
     'notes.changed': { vault: string }
     /** The Baalda tab now shows this note (a click in the panel or a followed link). */
     'note.shown': { vault: string; path: string }
+    /** The vault's lock checkbox changed. */
+    'vault.locked': { vault: string; locked: boolean }
     /** Progress of the sync button's run. */
     'sync.status': { vault: string; state: SyncState; message: string }
   }

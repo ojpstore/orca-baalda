@@ -29,7 +29,8 @@ const els = {
   create: $<HTMLFormElement>('create'),
   name: $<HTMLInputElement>('name'),
   path: $('path'),
-  filter: $<HTMLInputElement>('filter')
+  filter: $<HTMLInputElement>('filter'),
+  lock: $<HTMLInputElement>('lock')
 }
 for (const [id, icon] of [
   ['refresh', 'refresh'],
@@ -143,7 +144,9 @@ const refresh = () =>
   guard(async () => {
     showPath()
     if (!vault) return
-    data = await orca.plugin.request('notes.tree', { vault })
+    const t = await orca.plugin.request('notes.tree', { vault })
+    els.lock.checked = t.locked
+    data = t
     render()
   })
 
@@ -206,6 +209,13 @@ els.vault.addEventListener('change', () => {
   saveState()
   void refresh()
 })
+els.lock.addEventListener('change', () =>
+  guard(async () => {
+    await orca.plugin.request('vault.lock', { vault, locked: els.lock.checked })
+  }).then(() => {
+    if (!els.error.hidden) els.lock.checked = !els.lock.checked // not saved: show the real state
+  })
+)
 $('refresh').addEventListener('click', () => void refresh())
 els.filter.addEventListener('input', () => {
   query = norm(els.filter.value.trim())

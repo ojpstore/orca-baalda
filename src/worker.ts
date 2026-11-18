@@ -362,6 +362,21 @@ export default function activate(orca: OrcaWorkerApi): void {
     .get('addedVaults')
     .then((v) => (added = Array.isArray(v) ? (v as Vault[]) : []))
     .catch(() => {})
+  // Vaults locked in the panel, by resolved path: their notes open read-only.
+  const locks = orca.storage
+    .get('lockedVaults')
+    .then((v) => new Set(Array.isArray(v) ? (v as string[]) : []))
+    .catch(() => new Set<string>())
+
+  orca.panels.handle('vault.lock', async ({ vault, locked }) => {
+    const v = await vaultDir(vault)
+    const set = await locks
+    if (locked) set.add(v)
+    else set.delete(v)
+    await orca.storage.set('lockedVaults', [...set])
+    orca.panels.post('vault.locked', { vault: v, locked })
+    return { ok: true as const }
+  })
 
   orca.panels.handle('vaults.list', async () => {
     await loaded
@@ -394,12 +409,12 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('notes.tree', async ({ vault }) => {
     const v = await vaultDir(vault)
     watchVault(orca, v)
-    return tree(v)
+    return { ...(await tree(v)), locked: (await locks).has(v) }
   })
 
   orca.panels.handle('note.read', async ({ vault, path }) => {
     const v = await vaultDir(vault)
-    return { text: await readFile(docFile(v, path), 'utf8') }
+    return { text: await readFile(docFile(v, path), 'utf8'), locked: (await locks).has(v) }
   })
 
   // Shows a note in the single Baalda tab of the active workspace: point that workspace's view
