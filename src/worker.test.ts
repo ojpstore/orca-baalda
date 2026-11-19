@@ -98,3 +98,46 @@ test('searches note text, case-insensitive, skipping dot folders', async () => {
   assert.deepEqual(await main.search(vault, 'hi'), ['Welcome.md'])
   assert.deepEqual(await main.search(vault, '없는말'), [])
 })
+
+test('sync points Baalda at the chosen vault, keeping the rest of its config', async () => {
+  const { root, vault } = fixture()
+  await main.openOnStart(root)
+  const cfg = JSON.parse(readFileSync(main.paths.config, 'utf8'))
+  assert.equal(cfg.last_vault, root)
+  assert.equal(cfg.recent_vaults.length, 2)
+  await main.openOnStart(vault)
+  assert.equal(JSON.parse(readFileSync(main.paths.config, 'utf8')).last_vault, vault)
+})
+
+test('finds the server of a vault from Baalda webview storage', async () => {
+  const { root, vault } = fixture()
+  const cfg = join(vault, '.context', 'config.json')
+  writeFileSync(cfg, JSON.stringify({ ...JSON.parse(readFileSync(cfg, 'utf8')), organizationId: 'org1' }))
+  // One write-ahead log record holding one localStorage put, as Chromium writes it.
+  const key = Buffer.from('_http://tauri.localhost\x00\x01context.knownVaults:https://my.server', 'latin1')
+  const value = Buffer.concat([Buffer.from([1]), Buffer.from(JSON.stringify([{ id: 'org1', name: 'v' }]))])
+  const batch = Buffer.concat([Buffer.alloc(8, 0), Buffer.from([1, 0, 0, 0, 1, key.length]), key, Buffer.from([value.length]), value])
+  const head = Buffer.alloc(7)
+  head.writeUInt16LE(batch.length, 4)
+  head[6] = 1
+  mkdirSync(join(root, 'ls'))
+  writeFileSync(join(root, 'ls', '000003.log'), Buffer.concat([head, batch]))
+  main.paths.webStorage = join(root, 'ls')
+  assert.equal(await main.vaultServer(vault), 'https://my.server')
+  assert.equal(await main.openOnStart(vault), 'https://my.server')
+  assert.equal(JSON.parse(readFileSync(main.paths.config, 'utf8')).server_url, 'https://my.server')
+})
+
+test('a sync run fails with the reason when Baalda cannot get to its server', () => {
+  const v = join('C:', 'v', 'mynote')
+  const line = (s: string) => `[t][x][INFO] ${s}\n`
+  const opened = line(`[open_vault] ${v} — index_open 1ms`)
+  const s = 'https://my.server'
+  assert.equal(main.bootState(opened, v, s, false), null) // still starting
+  assert.equal(main.bootState(opened + line('[boot] auth-resolved +1ms') + line('[boot] channel-ready +2ms'), v, s, false), 'ready')
+  assert.match(main.bootState(opened + line(`[open_vault] ${join('C:', 'v')} — x`), v, s, false) ?? '', /대신 "v"/)
+  assert.match(main.bootState(opened, v, s, true) ?? '', /로그인/)
+  assert.match(main.bootState(opened + line('[boot] auth-resolved +1ms'), v, s, true) ?? '', /시작되지 않았습니다/)
+  assert.match(main.bootState(opened + line('[boot] auth-resolved +1ms') + line('[boot] channel-start +1ms'), v, s, true) ?? '', /연결하지 못했습니다/)
+  assert.match(main.bootState('', v, s, true) ?? '', /열지 못했습니다/)
+})

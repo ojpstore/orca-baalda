@@ -1,7 +1,8 @@
 // The panel <-> worker contract, declared once: panel/main.ts and src/worker.ts both read it.
 export type Vault = { name: string; path: string }
-/** A sync run: Baalda runs hidden ('syncing'), then closes ('done'), or is left running ('timeout'). */
-export type SyncState = 'syncing' | 'done' | 'timeout'
+/** A sync run: Baalda runs hidden ('syncing'), then closes ('done'), or is left running ('timeout'),
+ *  or could not reach its server and was closed ('failed', the message says why). */
+export type SyncState = 'syncing' | 'done' | 'timeout' | 'failed'
 /** 'local': the vault has no server (sync off in Baalda). */
 export type Sync = 'synced' | 'pending' | 'local'
 /** Folder keys end with '/', note keys are vault-relative paths ending in '.md'. */

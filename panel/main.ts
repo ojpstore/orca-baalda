@@ -28,6 +28,7 @@ const els = {
   tree: $<HTMLUListElement>('tree'),
   status: $('status'),
   error: $('error'),
+  errorText: $('error-text'),
   create: $<HTMLFormElement>('create'),
   name: $<HTMLInputElement>('name'),
   path: $('path'),
@@ -75,13 +76,24 @@ function label(text: string): DocumentFragment {
   return f
 }
 
-async function guard(fn: () => Promise<void>): Promise<void> {
+/** Shows a message under the toolbar (empty hides it); it closes itself after 5 seconds. */
+let errorTimer = 0
+function showError(message: string): void {
+  clearTimeout(errorTimer)
+  els.errorText.textContent = message
+  els.error.hidden = !message
+  if (message) errorTimer = window.setTimeout(() => showError(''), 5000)
+}
+$('error-close').addEventListener('click', () => showError(''))
+
+/** Runs fn, showing what it throws. Answers whether it succeeded. */
+async function guard(fn: () => Promise<void>): Promise<boolean> {
   try {
-    els.error.hidden = true
     await fn()
+    return true
   } catch (e) {
-    els.error.textContent = e instanceof Error ? e.message : String(e)
-    els.error.hidden = false
+    showError(e instanceof Error ? e.message : String(e))
+    return false
   }
 }
 
@@ -282,6 +294,11 @@ document.addEventListener('keydown', (e) => {
 
 els.vault.addEventListener('change', () => {
   vault = els.vault.value
+  // Sync state belongs to the vault it ran for: a new vault starts with the button ready.
+  $<HTMLButtonElement>('sync').disabled = false
+  $('sync').title = '동기화 (Baalda를 창 없이 실행, 업로드가 끝나면 종료)'
+  els.status.textContent = ''
+  showError('')
   selected = ''
   expanded.clear()
   saveState()
@@ -290,8 +307,8 @@ els.vault.addEventListener('change', () => {
 els.lock.addEventListener('change', () =>
   guard(async () => {
     await orca.plugin.request('vault.lock', { vault, locked: els.lock.checked })
-  }).then(() => {
-    if (!els.error.hidden) els.lock.checked = !els.lock.checked // not saved: show the real state
+  }).then((ok) => {
+    if (!ok) els.lock.checked = !els.lock.checked // not saved: show the real state
     toolbar()
   })
 )
@@ -332,8 +349,14 @@ $('sync').addEventListener('click', () =>
     const btn = $<HTMLButtonElement>('sync')
     btn.disabled = true
     let started = false
+    showError('')
     try {
-      const r = await orca.plugin.request('sync.run', { vault })
+      const r = await orca.plugin.request('sync.run', { vault }).catch((e: unknown) => {
+        // Stopped before Baalda started (the server is unreachable): keep the reason up.
+        showError(e instanceof Error ? e.message : String(e))
+        return null
+      })
+      if (!r) return
       started = r.started
       if (!r.started) btn.title = r.running ? 'Baalda 앱이 실행 중이라 이미 동기화되고 있습니다' : '동기화'
       await refresh()
@@ -448,12 +471,9 @@ orca.plugin.on('sync.status', (p) => {
   const btn = $<HTMLButtonElement>('sync')
   btn.disabled = p.state === 'syncing'
   btn.title = p.message
-  els.status.textContent = p.state === 'syncing' ? `"${p.server}"에 동기화` : ''
+  els.status.textContent = p.state === 'syncing' ? `[${p.server.replace(/^https?:\/\//, '')}] 동기화 중` : ''
+  if (p.state === 'timeout' || p.state === 'failed') showError(p.message)
   if (p.state !== 'syncing') void refresh()
-  if (p.state === 'timeout') {
-    els.error.textContent = p.message
-    els.error.hidden = false
-  }
 })
 
 orca.plugin.on('notes.changed', (p) => {

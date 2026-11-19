@@ -95,6 +95,9 @@
       }
       .error { margin: 0 4px 8px; padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--orca-destructive) 18%, transparent); color: var(--orca-foreground); font-size: 12px; }
       .error[hidden] { display: none; }
+      .error { display: flex; align-items: flex-start; gap: 6px; }
+      .error span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+      .error button { flex: none; width: 18px; height: 18px; font-size: 14px; line-height: 1; }
       .confirm { max-width: calc(100vw - 32px); padding: 14px; border: 1px solid var(--orca-border); border-radius: 8px; background: var(--orca-card); color: var(--orca-foreground); }
       .confirm::backdrop { background: rgb(0 0 0 / 0.4); }
       .confirm p { margin: 0 0 12px; overflow-wrap: anywhere; }
@@ -177,7 +180,7 @@
         </div>
       </form>
     </dialog>
-    <div class="error" id="error" role="alert" hidden></div>
+    <div class="error" id="error" role="alert" hidden><span id="error-text"></span><button id="error-close" title="닫기" aria-label="메시지 닫기">×</button></div>
     <ul id="tree" role="tree" aria-label="노트"></ul>
     <script type="module" src="./main.ts"></script>
   </body>

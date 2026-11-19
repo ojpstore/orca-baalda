@@ -7,6 +7,7 @@ import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
+import { readLevelDb, storageText } from './ldb'
 
 // Orca starts workers with a trimmed environment: derive the Windows dirs from the home folder.
 const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming')
@@ -16,10 +17,12 @@ export const paths = {
   config: join(appData, 'com.baalda.context', 'config.json'),
   app: join(localAppData, 'Baalda', 'desktop.exe'),
   orca: join(localAppData, 'Programs', 'orca', 'resources', 'bin', 'orca.exe'),
-  log: join(localAppData, 'com.baalda.context', 'logs', 'baalda.log')
+  log: join(localAppData, 'com.baalda.context', 'logs', 'baalda.log'),
+  /** The Baalda webview's localStorage: which server each organization (vault) lives on. */
+  webStorage: join(localAppData, 'com.baalda.context', 'EBWebView', 'Default', 'Local Storage', 'leveldb')
 }
 /** Auto-close timing for a sync run: at least minMs, state quiet for quietMs, give up after maxMs. */
-const SYNC = { minMs: 15_000, quietMs: 8_000, maxMs: 300_000 }
+const SYNC = { minMs: 15_000, quietMs: 8_000, maxMs: 300_000, connectTries: 3, connectEveryMs: 3_000 }
 /** The one file the Baalda tab shows, inside the active workspace: `{ vault, path }` of the note. */
 // Under .orca/: Orca's own folder, which its dev-plugin watcher also skips.
 const VIEW_DIR = join('.orca', 'baalda')
@@ -38,7 +41,7 @@ async function activeWorkspace(orca: OrcaWorkerApi): Promise<string> {
 }
 
 type BaaldaConfig = { server_url?: string; last_vault?: string; vaults_root?: string; recent_vaults?: Vault[] }
-type VaultMeta = { serverVaultId?: string; docs?: Record<string, string>; pushed?: string[] }
+type VaultMeta = { organizationId?: string; serverVaultId?: string; docs?: Record<string, string>; pushed?: string[] }
 
 async function readJson<T>(file: string): Promise<T | null> {
   try {
@@ -68,6 +71,86 @@ async function listVaults(): Promise<{ vaults: Vault[]; last: string | null; roo
     last: cfg.last_vault ? resolve(cfg.last_vault) : null,
     root: cfg.vaults_root ? resolve(cfg.vaults_root) : null
   }
+}
+
+/**
+ * The server a vault syncs with. Each vault is a Baalda organization; the app keeps which server
+ * holds which organization only in its webview storage (`context.knownVaults:<server>`).
+ */
+export async function vaultServer(vault: string): Promise<string | null> {
+  const org = (await readJson<VaultMeta>(join(vault, '.context', 'config.json')))?.organizationId
+  if (!org) return null
+  const store = await readLevelDb(paths.webStorage).catch(() => new Map<string, Buffer>())
+  const prefix = 'context.knownVaults:'
+  for (const [key, value] of store) {
+    const at = key.indexOf(prefix)
+    if (at < 0) continue
+    try {
+      if ((JSON.parse(storageText(value)) as { id?: string }[]).some((o) => o.id === org)) return key.slice(at + prefix.length)
+    } catch {
+      // not JSON: skip
+    }
+  }
+  return null
+}
+
+/**
+ * Baalda opens `last_vault` on start against `server_url`, and syncs only that vault, so point both
+ * at the vault to sync. Keeps Baalda's own spelling of the path. Answers the server.
+ */
+export async function openOnStart(vault: string): Promise<string> {
+  const cfg = await readJson<BaaldaConfig>(paths.config)
+  if (!cfg) throw new Error(`Baalda 설정을 읽을 수 없습니다: ${paths.config}`) // never overwrite it blind
+  const server = (await vaultServer(vault)) ?? cfg.server_url ?? ''
+  const known = cfg.recent_vaults?.find((r) => resolve(r.path) === vault)
+  const last = cfg.last_vault && resolve(cfg.last_vault) === vault ? cfg.last_vault : (known?.path ?? vault)
+  if (last !== cfg.last_vault || server !== (cfg.server_url ?? ''))
+    await writeFile(paths.config, JSON.stringify({ ...cfg, last_vault: last, server_url: server || undefined }, null, 2))
+  return server
+}
+
+/** Network failures that mean nothing answers at that address. */
+const DOWN = /^(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT)$/
+
+/**
+ * Why the server cannot be reached, or null when something answers there. A TLS complaint counts
+ * as an answer: this worker's Node does not trust the Windows certificate store Baalda uses.
+ */
+async function reach(server: string, tries = 3): Promise<string | null> {
+  let code = ''
+  for (let i = 1; i <= tries; i++) {
+    try {
+      await fetch(server, { method: 'HEAD', signal: AbortSignal.timeout(3000) })
+      return null
+    } catch (e) {
+      const err = e as Error & { cause?: { code?: string } }
+      code = err.name === 'TimeoutError' ? 'ETIMEDOUT' : (err.cause?.code ?? '')
+      if (!DOWN.test(code)) return null
+    }
+    if (i < tries) await new Promise((r) => setTimeout(r, 1000))
+  }
+  const why = code === 'ENOTFOUND' || code === 'EAI_AGAIN' ? '주소를 찾을 수 없음' : code === 'ETIMEDOUT' ? '응답 없음' : `연결 거부 ${code}`
+  return `${server}에 ${tries}회 연결을 시도했지만 실패했습니다 (${why}). 서버 주소와 네트워크를 확인하세요.`
+}
+
+/**
+ * How far Baalda's start got, from its log since the run began. Baalda writes no error when it
+ * cannot sync; its boot steps just stop. 'ready': connected to the server. A string: why it
+ * failed. null: still starting. `late`: past the time a start should take, so a missing step fails.
+ */
+export function bootState(log: string, vault: string, server: string, late: boolean): 'ready' | string | null {
+  const opened = [...log.matchAll(/\[open_vault\] (.+?) — /g)].map((m) => resolve(m[1]))
+  const other = opened.find((p) => p !== vault)
+  if (opened.includes(vault) && other)
+    return `Baalda가 이 vault 대신 "${basename(other)}"를 열었습니다. ${server}에 로그인한 계정에 이 vault가 없습니다. Baalda 앱에서 이 서버로 로그인하세요.`
+  if (log.includes('[boot] channel-ready')) return 'ready'
+  if (!late) return null
+  if (!opened.includes(vault)) return 'Baalda가 이 vault를 열지 못했습니다.'
+  if (!log.includes('[boot] auth-resolved')) return `${server} 로그인을 확인하지 못했습니다. Baalda 앱에서 로그인하세요.`
+  if (!log.includes('[boot] channel-start'))
+    return `${server}에서 동기화가 시작되지 않았습니다(로그인 만료 또는 이 vault 권한 없음). Baalda 앱 창 열기로 로그인 상태를 확인하세요.`
+  if (!log.includes('[boot] socket-open')) return `${server}에 연결하지 못했습니다. 서버 주소와 네트워크를 확인하세요.`
+  return `${server}의 동기화 채널이 열리지 않았습니다. 이 vault의 권한과 로그인 상태를 확인하세요.`
 }
 
 /** The panel is sandboxed: only touch vaults Baalda knows, and only paths inside them. */
@@ -314,6 +397,12 @@ async function baaldaRunning(): Promise<boolean> {
   return (await powershell(script, { BAALDA_EXE: paths.app })).includes('yes')
 }
 
+/** Whether a Baalda window is on the hidden desktop: one a sync run started, never the person's. */
+async function hiddenRunning(): Promise<boolean> {
+  const script = [WIN32, "[Console]::Out.Write(@([BW]::OnDesk($env:BAALDA_DESK, 'Baalda')).Count)"].join('\n')
+  return Number(await powershell(script, { BAALDA_DESK: DESK })) > 0
+}
+
 /**
  * Starts Baalda on the hidden desktop. Baalda has no hidden-start option and shows its own window,
  * but a window on another desktop never reaches the person's screen. Answers the pid, or throws.
@@ -522,6 +611,21 @@ export default function activate(orca: OrcaWorkerApi): void {
   async function closeWhenSynced(vault: string, run: number, logStart: number): Promise<void> {
     const started = Date.now()
     const stateFile = join(vault, '.context', 'config.json')
+    // Connection test: a few checks of Baalda's log for it to reach the server, else stop.
+    for (let i = 1; ; i++) {
+      await new Promise((r) => setTimeout(r, SYNC.connectEveryMs))
+      if (run !== syncRun) return
+      const log = ((await readFile(paths.log).catch(() => null)) ?? Buffer.alloc(0)).subarray(logStart).toString('utf8')
+      const boot = bootState(log, vault, server, i >= SYNC.connectTries)
+      if (boot === 'ready') break
+      if (boot) {
+        orca.log(`sync: failed: ${boot}`)
+        await closeApp()
+        status(vault, 'failed', `동기화 중단: ${boot}`)
+        return
+      }
+      status(vault, 'syncing', `서버 연결 확인 중 (${i}/${SYNC.connectTries})`)
+    }
     for (;;) {
       await new Promise((r) => setTimeout(r, 2000))
       if (run !== syncRun) return
@@ -532,8 +636,6 @@ export default function activate(orca: OrcaWorkerApi): void {
         return
       }
       if (elapsed < SYNC.minMs) continue
-      const log = await readFile(paths.log, 'utf8').catch(() => '')
-      if (!log.slice(logStart).includes('channel-ready')) continue
       const quietMs = Date.now() - ((await stat(stateFile).catch(() => null))?.mtimeMs ?? 0)
       if (quietMs < SYNC.quietMs) continue
       const pending = (await tree(vault)).pending.length
@@ -553,11 +655,19 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('sync.run', async ({ vault }) => {
     const v = await vaultDir(vault)
     if (process.platform !== 'win32') return { started: false, running: false }
-    // A Baalda the person runs themselves syncs live already; never close theirs.
-    if (await baaldaRunning()) return { started: false, running: true }
+    if (await baaldaRunning()) {
+      // A Baalda the person runs themselves syncs live already; never close theirs.
+      if (!(await hiddenRunning())) return { started: false, running: true }
+      // One an earlier run left on the hidden desktop (the worker restarted before it closed it):
+      // end it and start over on the chosen vault.
+      orca.log('sync: closing a hidden Baalda left by an earlier run')
+      if (!(await closeApp()).includes('closed')) throw new Error('이전 동기화의 Baalda를 닫지 못했습니다.')
+    }
     if (!existsSync(paths.app)) throw new Error(`Baalda 앱을 찾을 수 없습니다: ${paths.app}`)
     const run = ++syncRun
-    server = (await readJson<BaaldaConfig>(paths.config))?.server_url ?? '서버'
+    server = (await openOnStart(v)) || '서버'
+    const unreachable = await reach(server)
+    if (unreachable) throw new Error(`동기화 중단: ${unreachable}`)
     const logStart = (await stat(paths.log).catch(() => null))?.size ?? 0
     status(v, 'syncing', '동기화 중…')
     orca.log(`sync: starting Baalda hidden for ${v}`)
