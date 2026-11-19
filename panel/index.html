@@ -59,7 +59,8 @@
       .tools { display: flex; justify-content: flex-end; gap: 2px; padding: 0 4px 6px; }
       .tools[hidden] { display: none; }
       .tabs { flex: 1; display: flex; gap: 2px; }
-      .tabs button { width: auto; height: 24px; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; }
+      .tabs button { width: auto; height: 24px; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; display: inline-flex; gap: 4px; }
+      .tabs button svg { width: 12px; height: 12px; }
       .tabs button[aria-selected='true'] { background: var(--orca-accent); color: var(--orca-foreground); }
       #bookmark[aria-pressed='true'] svg, .star svg { fill: currentColor; }
       #bookmark[aria-pressed='true'], .star { color: var(--dot-pending); }

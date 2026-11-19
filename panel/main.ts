@@ -45,6 +45,7 @@ for (const [id, icon] of [
   ['collapse', 'collapse'],
   ['change-path', 'folderPath']
 ] as const) $(id).innerHTML = svg(icon)
+for (const [id, icon] of [['tab-notes', 'file'], ['tab-stars', 'star']] as const) $(id).insertAdjacentHTML('afterbegin', svg(icon))
 
 let vault = ''
 let data: Tree | null = null
