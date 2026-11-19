@@ -128,16 +128,13 @@ test('finds the server of a vault from Baalda webview storage', async () => {
   assert.equal(JSON.parse(readFileSync(main.paths.config, 'utf8')).server_url, 'https://my.server')
 })
 
-test('a sync run fails with the reason when Baalda cannot get to its server', () => {
+test('a sync run stops when Baalda is not on the chosen vault', () => {
   const v = join('C:', 'v', 'mynote')
-  const line = (s: string) => `[t][x][INFO] ${s}\n`
+  const line = (s: string) => `[t][x][INFO] ${s}
+`
   const opened = line(`[open_vault] ${v} — index_open 1ms`)
   const s = 'https://my.server'
-  assert.equal(main.bootState(opened, v, s, false), null) // still starting
-  assert.equal(main.bootState(opened + line('[boot] auth-resolved +1ms') + line('[boot] channel-ready +2ms'), v, s, false), 'ready')
-  assert.match(main.bootState(opened + line(`[open_vault] ${join('C:', 'v')} — x`), v, s, false) ?? '', /대신 "v"/)
-  assert.match(main.bootState(opened, v, s, true) ?? '', /로그인/)
-  assert.match(main.bootState(opened + line('[boot] auth-resolved +1ms'), v, s, true) ?? '', /시작되지 않았습니다/)
-  assert.match(main.bootState(opened + line('[boot] auth-resolved +1ms') + line('[boot] channel-start +1ms'), v, s, true) ?? '', /연결하지 못했습니다/)
-  assert.match(main.bootState('', v, s, true) ?? '', /열지 못했습니다/)
+  assert.equal(main.wrongVault(opened, v, s), null)
+  assert.match(main.wrongVault(opened + line(`[open_vault] ${join('C:', 'v')} — x`), v, s) ?? '', /대신 "v"/)
+  assert.match(main.wrongVault('', v, s) ?? '', /열지 못했습니다/)
 })

@@ -134,23 +134,39 @@ async function reach(server: string, tries = 3): Promise<string | null> {
 }
 
 /**
- * How far Baalda's start got, from its log since the run began. Baalda writes no error when it
- * cannot sync; its boot steps just stop. 'ready': connected to the server. A string: why it
- * failed. null: still starting. `late`: past the time a start should take, so a missing step fails.
+ * Why Baalda's log since the run began says it is not on this vault: it opened another one after
+ * it (the signed-in account has no such vault), or none at all. null when it is on this vault.
+ * Only `open_vault` lines are trusted: Baalda logs its other boot steps only some of the time.
  */
-export function bootState(log: string, vault: string, server: string, late: boolean): 'ready' | string | null {
+export function wrongVault(log: string, vault: string, server: string): string | null {
   const opened = [...log.matchAll(/\[open_vault\] (.+?) — /g)].map((m) => resolve(m[1]))
-  const other = opened.find((p) => p !== vault)
-  if (opened.includes(vault) && other)
-    return `Baalda가 이 vault 대신 "${basename(other)}"를 열었습니다. ${server}에 로그인한 계정에 이 vault가 없습니다. Baalda 앱에서 이 서버로 로그인하세요.`
-  if (log.includes('[boot] channel-ready')) return 'ready'
-  if (!late) return null
   if (!opened.includes(vault)) return 'Baalda가 이 vault를 열지 못했습니다.'
-  if (!log.includes('[boot] auth-resolved')) return `${server} 로그인을 확인하지 못했습니다. Baalda 앱에서 로그인하세요.`
-  if (!log.includes('[boot] channel-start'))
-    return `${server}에서 동기화가 시작되지 않았습니다(로그인 만료 또는 이 vault 권한 없음). Baalda 앱 창 열기로 로그인 상태를 확인하세요.`
-  if (!log.includes('[boot] socket-open')) return `${server}에 연결하지 못했습니다. 서버 주소와 네트워크를 확인하세요.`
-  return `${server}의 동기화 채널이 열리지 않았습니다. 이 vault의 권한과 로그인 상태를 확인하세요.`
+  const other = opened.find((p) => p !== vault)
+  if (other) return `Baalda가 이 vault 대신 "${basename(other)}"를 열었습니다. ${server}에 로그인한 계정에 이 vault가 없습니다.`
+  return null
+}
+
+/** Whether Baalda has a saved sign-in for the server (it keeps one per server in Windows' Credential Manager). */
+async function signedIn(server: string): Promise<boolean> {
+  const target = `session-v2:${server}.com.baalda.context`
+  // cmdkey fails when nothing matches: that is an answer here, not an error.
+  const out = await powershell('cmdkey /list:$env:BAALDA_TARGET | Out-String\nexit 0', { BAALDA_TARGET: target })
+  // The header repeats the target even when nothing matches; a stored one adds its own line.
+  return out.split(target).length > 2
+}
+
+/** Whether Baalda (its app or its webview) holds an open TCP connection to the server right now. */
+async function connected(server: string): Promise<boolean> {
+  const script = [
+    '$ips = @([Net.Dns]::GetHostAddresses($env:BAALDA_HOST) | ForEach-Object { $_.IPAddressToString })',
+    "$ids = @(Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe' OR Name='desktop.exe'\" | Where-Object { $_.ExecutablePath -eq $env:BAALDA_EXE -or $_.CommandLine -match 'com\\.baalda\\.context' } | ForEach-Object { $_.ProcessId })",
+    // netstat, not Get-NetTCPConnection: that module does not load in Orca's trimmed worker env.
+    "foreach ($l in (& \"$env:SystemRoot\\System32\\netstat.exe\" -ano -p TCP)) {",
+    '  $f = -split $l',
+    "  if ($f.Count -ge 5 -and $f[3] -eq 'ESTABLISHED' -and ($ids -contains [int]$f[4]) -and ($ips -contains ($f[2] -replace ':\\d+$', ''))) { 'yes'; break }",
+    '}'
+  ].join('\n')
+  return (await powershell(script, { BAALDA_HOST: new URL(server).hostname, BAALDA_EXE: paths.app })).includes('yes')
 }
 
 /** The panel is sandboxed: only touch vaults Baalda knows, and only paths inside them. */
@@ -611,17 +627,19 @@ export default function activate(orca: OrcaWorkerApi): void {
   async function closeWhenSynced(vault: string, run: number, logStart: number): Promise<void> {
     const started = Date.now()
     const stateFile = join(vault, '.context', 'config.json')
-    // Connection test: a few checks of Baalda's log for it to reach the server, else stop.
+    // Connection test: a few checks that Baalda is on this vault and connected to its server, else stop.
     for (let i = 1; ; i++) {
       await new Promise((r) => setTimeout(r, SYNC.connectEveryMs))
       if (run !== syncRun) return
       const log = ((await readFile(paths.log).catch(() => null)) ?? Buffer.alloc(0)).subarray(logStart).toString('utf8')
-      const boot = bootState(log, vault, server, i >= SYNC.connectTries)
-      if (boot === 'ready') break
-      if (boot) {
-        orca.log(`sync: failed: ${boot}`)
+      const wrong = wrongVault(log, vault, server)
+      const ok = !wrong && (await connected(server))
+      if (ok) break
+      if (i >= SYNC.connectTries) {
+        const why = wrong ?? `Baalda가 ${server}에 연결하지 못했습니다 (${SYNC.connectTries}회 확인). 서버 상태와 이 vault의 권한을 확인하세요.`
+        orca.log(`sync: failed: ${why}`)
         await closeApp()
-        status(vault, 'failed', `동기화 중단: ${boot}`)
+        status(vault, 'failed', `동기화 중단: ${why}`)
         return
       }
       status(vault, 'syncing', `서버 연결 확인 중 (${i}/${SYNC.connectTries})`)
@@ -668,6 +686,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     server = (await openOnStart(v)) || '서버'
     const unreachable = await reach(server)
     if (unreachable) throw new Error(`동기화 중단: ${unreachable}`)
+    if (!(await signedIn(server)))
+      throw new Error(`동기화 중단: Baalda가 ${server}에 로그인되어 있지 않습니다. Baalda 앱 창 열기로 이 서버에 로그인하세요.`)
     const logStart = (await stat(paths.log).catch(() => null))?.size ?? 0
     status(v, 'syncing', '동기화 중…')
     orca.log(`sync: starting Baalda hidden for ${v}`)
