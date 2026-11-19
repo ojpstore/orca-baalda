@@ -40,7 +40,6 @@ for (const [id, icon] of [
   ['app', 'openApp'],
   ['new-note', 'newNote'],
   ['new-folder', 'newFolder'],
-  ['bookmark', 'star'],
   ['delete', 'trash'],
   ['collapse', 'collapse'],
   ['change-path', 'folderPath']
@@ -114,7 +113,7 @@ function node(n: NoteNode, depth: number): HTMLLIElement {
       : `<span class="icon file">${svg(n.kind === 'page' ? 'page' : 'file')}</span>`
   row.innerHTML =
     `<span class="chev">${n.kind === 'folder' ? svg('chevron') : ''}</span>${icon}<span class="label"></span>` +
-    (n.kind !== 'folder' && starred().includes(n.key) ? `<span class="star" title="즐겨찾기 해제">${svg('star')}</span>` : '') +
+    (n.kind === 'folder' ? '' : starred().includes(n.key) ? `<span class="star on" title="즐겨찾기 해제">${svg('star')}</span>` : `<span class="star" title="즐겨찾기 추가">${svg('star')}</span>`) +
     (n.sync === 'local' ? '' : `<span class="dot ${n.sync}" title="${n.sync === 'synced' ? '동기화됨' : '동기화 대기'}"></span>`)
   ;(row.querySelector('.label') as HTMLElement).append(label(n.label))
   li.append(row)
@@ -167,9 +166,6 @@ function toolbar(): void {
   $<HTMLButtonElement>('new-note').disabled = locked
   $<HTMLButtonElement>('new-folder').disabled = locked
   if (locked) els.create.hidden = true
-  const star = $<HTMLButtonElement>('bookmark')
-  star.disabled = !note
-  star.setAttribute('aria-pressed', String(note && starred().includes(selected)))
   const fold = $<HTMLButtonElement>('collapse')
   const any = expanded.size > 0
   fold.innerHTML = svg(any ? 'collapse' : 'expand')
@@ -184,7 +180,6 @@ function toggleBookmark(): void {
   void orca.storage.set('bookmarks', bookmarks).catch(() => {})
   render()
 }
-$('bookmark').addEventListener('click', toggleBookmark)
 
 function showTab(t: typeof tab): void {
   tab = t
@@ -246,7 +241,6 @@ els.tree.addEventListener('click', (e) => {
   const row = (e.target as HTMLElement).closest<HTMLElement>('.row')
   if (!row?.dataset.key) return
   if ((e.target as HTMLElement).closest('.star')) {
-    // The star only shows on starred notes, so clicking it un-stars.
     selected = row.dataset.key
     toggleBookmark()
   } else if (row.getAttribute('aria-expanded') !== null) void activate(row.dataset.key)

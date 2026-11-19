@@ -62,10 +62,11 @@
       .tabs button { width: auto; height: 24px; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; display: inline-flex; gap: 4px; }
       .tabs button svg { width: 12px; height: 12px; }
       .tabs button[aria-selected='true'] { background: var(--orca-accent); color: var(--orca-foreground); }
-      #bookmark[aria-pressed='true'] svg, .star svg { fill: currentColor; }
-      #bookmark[aria-pressed='true'], .star { color: var(--dot-pending); }
-      .star { flex: none; display: grid; place-items: center; cursor: pointer; }
+      .star { flex: none; display: grid; place-items: center; cursor: pointer; color: var(--orca-muted-foreground); visibility: hidden; }
       .star svg { width: 11px; height: 11px; }
+      .row:hover .star, .row.selected .star, .star.on { visibility: visible; }
+      .star.on { color: var(--dot-pending); }
+      .star.on svg { fill: currentColor; }
       .status { font-size: 11px; color: var(--orca-muted-foreground); margin-right: 4px; }
       .filter { padding: 0 4px 6px; }
       .filter input {
@@ -158,7 +159,6 @@
     <div class="tools" id="tools">
       <button id="new-note" title="새 노트" aria-label="새 노트"></button>
       <button id="new-folder" title="새 폴더" aria-label="새 폴더"></button>
-      <button id="bookmark" title="즐겨찾기 추가/해제 (B)" aria-label="즐겨찾기 추가/해제" aria-pressed="false" disabled></button>
       <button id="delete" title="선택한 노트 삭제" aria-label="선택한 노트 삭제" disabled></button>
       <button id="collapse" title="모두 접기" aria-label="모두 접기"></button>
     </div>
