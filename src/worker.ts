@@ -4,7 +4,7 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import type { NoteNode, Sync, SyncState, Tree, Vault } from './protocol'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { readLevelDb, storageText } from './ldb'
@@ -194,6 +194,17 @@ function docFile(vault: string, rel: string): string {
   const file = inside(vault, rel)
   if (!isDoc(file) || !existsSync(file)) throw new Error(`No such note: ${rel}`)
   return file
+}
+
+const hasDotSegment = (rel: string) => slash(rel).replace(/\/+$/, '').split('/').some((p) => p.startsWith('.'))
+
+async function folderPath(vault: string, rel: string): Promise<string> {
+  const trimmed = slash(rel).replace(/\/+$/, '')
+  if (!trimmed || hasDotSegment(trimmed)) throw new Error(`No such folder: ${rel}`)
+  const dir = inside(vault, trimmed)
+  const info = await stat(dir).catch(() => null)
+  if (!info?.isDirectory()) throw new Error(`No such folder: ${rel}`)
+  return dir
 }
 
 /**
@@ -597,15 +608,57 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { path: kind === 'folder' ? rel + '/' : rel }
   })
 
+  orca.panels.handle('note.rename', async ({ vault, path, name }) => {
+    const v = await vaultDir(vault)
+    const isDir = path.endsWith('/')
+    const src = isDir ? await folderPath(v, path) : docFile(v, path)
+    const clean = isDir ? name.trim() : name.trim().replace(DOC, '')
+    if (BAD_NAME.test(clean)) throw new Error(`Invalid name: ${name}`)
+    const normPath = slash(path).replace(/\/+$/, '')
+    const parent = normPath.includes('/') ? normPath.slice(0, normPath.lastIndexOf('/') + 1) : ''
+    const ext = isDir ? '' : (normPath.match(DOC)?.[0] ?? '.md')
+    const nextRel = parent + clean + ext
+    const outPath = isDir ? nextRel + '/' : nextRel
+    if (nextRel === normPath) return { path: outPath }
+    const dest = inside(v, nextRel)
+    if (existsSync(dest)) throw new Error(`Already exists: ${outPath}`)
+    await rename(src, dest)
+    return { path: outPath }
+  })
+
+  orca.panels.handle('note.move', async ({ vault, from, toFolder }) => {
+    const v = await vaultDir(vault)
+    const isDir = from.endsWith('/')
+    const src = isDir ? await folderPath(v, from) : docFile(v, from)
+    const destDirRel = toFolder ? slash(toFolder).replace(/^\/+|\/+$/g, '') + '/' : ''
+    if (destDirRel) await folderPath(v, destDirRel)
+    const normFrom = slash(from).replace(/\/+$/, '')
+    if (isDir && (destDirRel === normFrom + '/' || destDirRel.startsWith(normFrom + '/'))) {
+      throw new Error('폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.')
+    }
+    const leaf = normFrom.split('/').pop()!
+    const nextRel = destDirRel + leaf
+    const outPath = isDir ? nextRel + '/' : nextRel
+    if (nextRel === normFrom) return { path: outPath }
+    const dest = inside(v, nextRel)
+    if (existsSync(dest)) throw new Error(`Already exists: ${outPath}`)
+    await rename(src, dest)
+    return { path: outPath }
+  })
+
   // Recycle Bin, not unlink: Baalda syncs the deletion to the server, so keep a way back.
   orca.panels.handle('note.delete', async ({ vault, path }) => {
-    const file = docFile(await vaultDir(vault), path)
-    if (process.platform !== 'win32') await rm(file)
-    else
+    const v = await vaultDir(vault)
+    const isDir = path.endsWith('/')
+    const target = isDir ? await folderPath(v, path) : docFile(v, path)
+    if (process.platform !== 'win32') await rm(target, { recursive: isDir })
+    else {
+      const fn = isDir ? 'DeleteDirectory' : 'DeleteFile'
       await powershell(
-        "Add-Type -AssemblyName Microsoft.VisualBasic\n[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:BAALDA_FILE, 'OnlyErrorDialogs', 'SendToRecycleBin')",
-        { BAALDA_FILE: file }
+        `Add-Type -AssemblyName Microsoft.VisualBasic\n[Microsoft.VisualBasic.FileIO.FileSystem]::${fn}($env:BAALDA_FILE, 'OnlyErrorDialogs', 'SendToRecycleBin')`,
+        { BAALDA_FILE: target }
       )
+    }
     return { ok: true as const }
   })
 

@@ -25,6 +25,14 @@
         font: 13px system-ui, sans-serif;
         cursor: pointer;
       }
+      .bar button:disabled { opacity: 0.35; cursor: default; }
+      .bar .nav { width: 28px; padding: 0; border: 0; background: none; color: var(--orca-foreground); }
+      .bar .nav:hover:not(:disabled) { background: var(--orca-muted); }
+      #conflict { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--orca-border); background: color-mix(in srgb, var(--orca-destructive) 16%, transparent); font-size: 12px; }
+      #conflict span { flex: 1; }
+      #conflict button { height: 24px; padding: 0 10px; border: 1px solid var(--orca-border); border-radius: 5px; background: var(--orca-card); color: var(--orca-foreground); font: 12px system-ui, sans-serif; cursor: pointer; }
+      #conflict button:hover { background: var(--orca-muted); }
+      #view input[type='checkbox']:not(:disabled) { cursor: pointer; accent-color: var(--orca-primary); }
       .bar button:focus-visible, textarea:focus-visible { outline: 2px solid var(--orca-ring); outline-offset: -2px; }
       main { flex: 1; overflow: auto; }
       #view { padding: 24px 32px 64px; }
@@ -139,7 +147,8 @@
     </style>
   </head>
   <body>
-    <div class="bar"><strong id="title"></strong><span id="state"></span><div id="find" role="search" hidden><input type="search" placeholder="찾기" aria-label="노트에서 찾기" spellcheck="false" /><span class="count" aria-live="polite"></span><button data-d="-1" title="이전 (Shift+Enter)" aria-label="이전">↑</button><button data-d="1" title="다음 (Enter)" aria-label="다음">↓</button><button data-d="0" title="닫기 (Esc)" aria-label="닫기">✕</button></div><button id="speak" title="소리 내어 읽기" hidden>읽기</button><button id="mode" hidden>편집</button></div>
+    <div class="bar"><button id="back" class="nav" title="뒤로 (Alt+←)" aria-label="뒤로" disabled>←</button><button id="fwd" class="nav" title="앞으로 (Alt+→)" aria-label="앞으로" disabled>→</button><strong id="title"></strong><span id="state"></span><div id="find" role="search" hidden><input type="search" placeholder="찾기" aria-label="노트에서 찾기" spellcheck="false" /><span class="count" aria-live="polite"></span><button data-d="-1" title="이전 (Shift+Enter)" aria-label="이전">↑</button><button data-d="1" title="다음 (Enter)" aria-label="다음">↓</button><button data-d="0" title="닫기 (Esc)" aria-label="닫기">✕</button></div><button id="speak" title="소리 내어 읽기" hidden>읽기</button><button id="mode" hidden>편집</button></div>
+    <div id="conflict" role="alert" hidden><span>이 노트가 외부에서 변경되었습니다.</span><button id="conflict-reload">다시 불러오기</button><button id="conflict-keep">내 내용 유지</button></div>
     <div id="tools" role="toolbar" aria-label="Markdown 서식" hidden>
       <button data-t="h1" title="제목 1">H1</button>
       <button data-t="h2" title="제목 2">H2</button>

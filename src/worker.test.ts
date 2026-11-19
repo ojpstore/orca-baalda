@@ -81,13 +81,45 @@ test('resolves wikilinks like Baalda: vault path, relative, then by name', async
 })
 
 // Its own worker: a delete under notes.tree's vault watcher keeps the test host from exiting.
-test('deletes notes only, to the Recycle Bin on Windows', async () => {
+test('deletes notes and folders, to the Recycle Bin on Windows', async () => {
   const { vault } = fixture()
   const worker = await mountWorker(main, { host: mockHost() })
   await worker.request('note.delete', { vault, path: 'Concepts/A.md' })
   assert.equal(existsSync(join(vault, 'Concepts', 'A.md')), false)
-  await assert.rejects(worker.request('note.delete', { vault, path: 'Concepts/' }))
+  await worker.request('note.delete', { vault, path: 'Concepts/' })
+  assert.equal(existsSync(join(vault, 'Concepts')), false)
+  await assert.rejects(worker.request('note.delete', { vault, path: '.context/' }))
   await assert.rejects(worker.request('note.delete', { vault, path: '../config.json' }))
+  await worker.deactivate()
+})
+
+test('renames and moves notes and folders safely within the vault', async () => {
+  const { vault } = fixture()
+  const worker = await mountWorker(main, { host: mockHost() })
+
+  const rNote = await worker.request('note.rename', { vault, path: 'Concepts/A.md', name: 'Alpha' })
+  assert.equal(rNote.path, 'Concepts/Alpha.md')
+  assert.equal(existsSync(join(vault, 'Concepts', 'Alpha.md')), true)
+
+  const rPage = await worker.request('note.rename', { vault, path: 'Dashboards/Home.html', name: 'Main' })
+  assert.equal(rPage.path, 'Dashboards/Main.html')
+  assert.equal(existsSync(join(vault, 'Dashboards', 'Main.html')), true)
+
+  const rDir = await worker.request('note.rename', { vault, path: 'Concepts/', name: 'Ideas' })
+  assert.equal(rDir.path, 'Ideas/')
+  assert.equal(existsSync(join(vault, 'Ideas', 'Alpha.md')), true)
+
+  const mNote = await worker.request('note.move', { vault, from: 'Ideas/Alpha.md', toFolder: '' })
+  assert.equal(mNote.path, 'Alpha.md')
+  assert.equal(existsSync(join(vault, 'Alpha.md')), true)
+
+  const mDir = await worker.request('note.move', { vault, from: 'Ideas/', toFolder: 'Dashboards/' })
+  assert.equal(mDir.path, 'Dashboards/Ideas/')
+  assert.equal(existsSync(join(vault, 'Dashboards', 'Ideas')), true)
+
+  await assert.rejects(worker.request('note.move', { vault, from: 'Dashboards/', toFolder: 'Dashboards/Ideas/' }))
+  await assert.rejects(worker.request('note.rename', { vault, path: 'Alpha.md', name: '../escape' }))
+  await assert.rejects(worker.request('note.rename', { vault, path: '.context/', name: 'x' }))
   await worker.deactivate()
 })
 

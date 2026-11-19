@@ -6,6 +6,9 @@ import { GROUPS } from './vendor/emoji.js'
 import type {} from '../src/protocol'
 
 const title = document.getElementById('title') as HTMLElement
+const backBtn = document.getElementById('back') as HTMLButtonElement
+const fwdBtn = document.getElementById('fwd') as HTMLButtonElement
+const conflict = document.getElementById('conflict') as HTMLElement
 const view = document.getElementById('view') as HTMLElement
 const source = document.getElementById('source') as HTMLTextAreaElement
 const mode = document.getElementById('mode') as HTMLButtonElement
@@ -93,11 +96,87 @@ export function render(md: string): string {
 type Target = { vault: string; path: string }
 let target: Target | null = null
 let text = ''
+let lastSavedText = ''
 let editing = false
 /** The vault is locked in the panel: no edit button. */
 let locked = false
 let dirty = false
 let timer: ReturnType<typeof setTimeout> | undefined
+
+let history: Target[] = []
+let histIdx = -1
+let navigating = false
+const sameTarget = (a: Target | null, b: Target | null) => !!a && !!b && a.vault === b.vault && a.path === b.path
+
+function syncNav(): void {
+  backBtn.disabled = histIdx <= 0
+  fwdBtn.disabled = histIdx < 0 || histIdx >= history.length - 1
+}
+
+function recordHistory(t: Target | null): void {
+  if (!t) return
+  if (navigating) {
+    navigating = false
+    syncNav()
+    return
+  }
+  if (sameTarget(history[histIdx] ?? null, t)) return
+  history = history.slice(0, histIdx + 1)
+  history.push(t)
+  if (history.length > 50) history.shift()
+  histIdx = history.length - 1
+  syncNav()
+}
+
+function goHistory(delta: number): void {
+  const nextIdx = histIdx + delta
+  if (nextIdx < 0 || nextIdx >= history.length) return
+  const dest = history[nextIdx]
+  histIdx = nextIdx
+  navigating = true
+  syncNav()
+  state.textContent = ''
+  void orca.plugin.request('note.open', dest).catch((err: unknown) => {
+    navigating = false
+    state.textContent = err instanceof Error ? err.message : String(err)
+  })
+}
+
+backBtn.addEventListener('click', () => goHistory(-1))
+fwdBtn.addEventListener('click', () => goHistory(1))
+
+/** Toggles the `idx`-th Markdown task checkbox outside YAML frontmatter and fenced code blocks. */
+export function toggleTaskCheckbox(md: string, idx: number, checked: boolean): string {
+  const fm = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(md)
+  const head = fm ? fm[0] : ''
+  const lines = (fm ? md.slice(head.length) : md).split('\n')
+  let inFence = false
+  let fenceChar = ''
+  let seen = 0
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const fence = /^\s*(```+|~~~+)/.exec(line)
+    if (fence) {
+      if (!inFence) {
+        inFence = true
+        fenceChar = fence[1][0]
+      } else if (fence[1][0] === fenceChar) {
+        inFence = false
+      }
+      continue
+    }
+    if (inFence) continue
+    const m = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\](?:\s|$))/.exec(line)
+    if (m) {
+      if (seen === idx) {
+        lines[i] = line.replace(/^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\])/, `$1${checked ? 'x' : ' '}$3`)
+        return head + lines.join('\n')
+      }
+      seen++
+    }
+  }
+  return md
+}
 
 function parse(raw: string): Target | null {
   try {
@@ -122,6 +201,10 @@ function show(): void {
   } else if (isPage(target)) page.srcdoc = withSdk(text) // HTML page (dashboard): sandboxed, own origin
   else {
     view.innerHTML = render(text)
+    Array.from(view.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).forEach((cb, i) => {
+      cb.dataset.taskIdx = String(i)
+      cb.disabled = locked
+    })
     for (const pre of Array.from(view.querySelectorAll('pre'))) {
       const b = document.createElement('button')
       b.className = 'copy'
@@ -278,6 +361,18 @@ function goto(link: string): void {
     .catch((err: unknown) => (state.textContent = err instanceof Error ? err.message : String(err)))
 }
 
+// Toggle checklist items directly from the view mode when the vault is unlocked.
+view.addEventListener('change', (e) => {
+  const cb = e.target as HTMLInputElement
+  if (cb.tagName !== 'INPUT' || cb.type !== 'checkbox' || cb.dataset.taskIdx === undefined) return
+  if (!target || locked) return
+  const next = toggleTaskCheckbox(text, Number(cb.dataset.taskIdx), cb.checked)
+  if (next === text) return
+  text = next
+  dirty = true
+  void save()
+})
+
 // Follow note links inside the vault; open web links in the browser.
 view.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button.copy')
@@ -325,9 +420,11 @@ function save(): Promise<void> {
 async function saveNow(): Promise<void> {
   if (!target || !dirty) return
   dirty = false
+  const snapshot = text
   state.textContent = '저장 중…'
   try {
-    await write(target, text)
+    await write(target, snapshot)
+    lastSavedText = snapshot
     state.textContent = '저장됨'
   } catch (e) {
     dirty = true
@@ -343,12 +440,26 @@ async function load(next: Target | null): Promise<void> {
   if (mine !== loads) return // a later click won while this read was in flight
   target = next
   text = read.text
+  lastSavedText = read.text
   locked = read.locked
+  conflict.hidden = true
+  recordHistory(next)
   if (locked && editing) setEditing(false)
   state.textContent = ''
   if (editing) source.value = text
   show()
 }
+
+document.getElementById('conflict-reload')!.addEventListener('click', () => {
+  dirty = false
+  conflict.hidden = true
+  if (target) void load(target)
+})
+document.getElementById('conflict-keep')!.addEventListener('click', () => {
+  conflict.hidden = true
+  dirty = true
+  state.textContent = '수정됨'
+})
 
 /** Replaces the selection through the editing command, so Ctrl+Z undoes it and `input` autosaves. */
 function insert(t: string): void {
@@ -552,6 +663,10 @@ source.addEventListener('input', () => {
   timer = setTimeout(() => void save(), 800) // autosave: the tab's own file is only the pointer
 })
 document.addEventListener('keydown', (e) => {
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault()
+    goHistory(e.key === 'ArrowLeft' ? -1 : 1)
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     e.preventDefault()
     void save()
@@ -579,9 +694,20 @@ orca.plugin.on('vault.locked', (p) => {
   else show()
 })
 
-// The note changed on disk (Baalda sync, another editor): reload unless the user is typing.
+// The note changed on disk (Baalda sync, another editor): reload in view mode, or warn if editing.
 orca.plugin.on('notes.changed', () => {
-  if (target && !dirty && !editing) void load(target).catch(() => (state.textContent = '노트가 삭제되었거나 읽을 수 없습니다'))
+  if (!target) return
+  if (!dirty && !editing) {
+    void load(target).catch(() => (state.textContent = '노트가 삭제되었거나 읽을 수 없습니다'))
+    return
+  }
+  const cur = target
+  void orca.plugin
+    .request('note.read', cur)
+    .then((r) => {
+      if (sameTarget(target, cur) && r.text !== text && r.text !== lastSavedText) conflict.hidden = false
+    })
+    .catch(() => {})
 })
 
 const doc = await orca.document!.session<string>()

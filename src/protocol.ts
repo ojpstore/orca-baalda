@@ -52,7 +52,17 @@ declare module 'orca' {
       input: { vault: string; folder: string; name: string; kind: 'note' | 'folder' }
       output: { path: string }
     }
-    /** Deletes a note or page: to the Recycle Bin on Windows. Baalda syncs the deletion. */
+    /** Renames a note, page, or folder (folder keys end with '/'). */
+    'note.rename': {
+      input: { vault: string; path: string; name: string }
+      output: { path: string }
+    }
+    /** Moves a note, page, or folder into `toFolder` ('' for vault root, or 'Folder/'). */
+    'note.move': {
+      input: { vault: string; from: string; toFolder: string }
+      output: { path: string }
+    }
+    /** Deletes a note, page, or folder: to the Recycle Bin on Windows. Baalda syncs the deletion. */
     'note.delete': { input: { vault: string; path: string }; output: { ok: true } }
     /** Shows the Baalda desktop app's window (hidden by sync.run), or starts it normally. */
     'app.show': { output: { ok: true } }

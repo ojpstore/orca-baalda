@@ -118,6 +118,8 @@
       }
       .row:hover { background: var(--orca-accent); }
       .row.selected { background: var(--orca-accent); border-color: var(--orca-border); }
+      .row.drop-target { background: color-mix(in srgb, var(--orca-primary) 20%, transparent); border-color: var(--orca-primary); }
+      #tree.drop-target { outline: 1px dashed var(--orca-primary); outline-offset: 2px; border-radius: 7px; }
       .row.selected .label { font-weight: 600; }
       .row.selected .file { color: var(--selected-icon); }
       .chev { width: 12px; flex: none; display: grid; place-items: center; color: var(--orca-muted-foreground); }
@@ -162,7 +164,8 @@
     <div class="tools" id="tools">
       <button id="new-note" title="새 노트" aria-label="새 노트"></button>
       <button id="new-folder" title="새 폴더" aria-label="새 폴더"></button>
-      <button id="delete" title="선택한 노트 삭제" aria-label="선택한 노트 삭제" disabled></button>
+      <button id="rename" title="이름 변경 (F2)" aria-label="이름 변경" disabled></button>
+      <button id="delete" title="선택한 항목 삭제" aria-label="선택한 항목 삭제" disabled></button>
       <button id="collapse" title="모두 접기" aria-label="모두 접기"></button>
     </div>
     <div class="filter">

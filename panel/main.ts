@@ -11,6 +11,7 @@ const ICONS = {
   folderPath: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8M13 10l3 3-3 3"/>',
   star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>',
+  rename: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   collapse: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
   expand: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
   openApp: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
@@ -41,6 +42,7 @@ for (const [id, icon] of [
   ['app', 'openApp'],
   ['new-note', 'newNote'],
   ['new-folder', 'newFolder'],
+  ['rename', 'rename'],
   ['delete', 'trash'],
   ['collapse', 'collapse'],
   ['change-path', 'folderPath']
@@ -50,7 +52,9 @@ for (const [id, icon] of [['tab-notes', 'file'], ['tab-stars', 'star']] as const
 let vault = ''
 let data: Tree | null = null
 let selected = ''
-let creating: 'note' | 'folder' = 'note'
+let creating: 'note' | 'folder' | 'rename' = 'note'
+let renamingPath = ''
+let draggingKey = ''
 const expanded = new Set<string>()
 let query = ''
 let tab: 'notes' | 'stars' = 'notes'
@@ -101,6 +105,60 @@ function saveState(): void {
   void orca.storage.set('ui', { vault, expanded: [...expanded], selected, tab }).catch(() => {})
 }
 
+/** Updates bookmarks, expanded folders, and selection after a rename or move. */
+function rewritePaths(oldKey: string, newKey: string): void {
+  const isDir = oldKey.endsWith('/')
+  const mapKey = (k: string) => (k === oldKey ? newKey : isDir && k.startsWith(oldKey) ? newKey + k.slice(oldKey.length) : k)
+  const keys = starred()
+  const nextBookmarks = keys.map(mapKey)
+  if (nextBookmarks.some((k, i) => k !== keys[i])) {
+    bookmarks = { ...bookmarks, [vault]: nextBookmarks }
+    void orca.storage.set('bookmarks', bookmarks).catch(() => {})
+  }
+  const nextExpanded = [...expanded].map(mapKey)
+  expanded.clear()
+  for (const k of nextExpanded) expanded.add(k)
+  selected = mapKey(selected)
+}
+
+function removePaths(oldKey: string): void {
+  const isDir = oldKey.endsWith('/')
+  const matches = (k: string) => k === oldKey || (isDir && k.startsWith(oldKey))
+  const keys = starred()
+  const nextBookmarks = keys.filter((k) => !matches(k))
+  if (nextBookmarks.length !== keys.length) {
+    bookmarks = { ...bookmarks, [vault]: nextBookmarks }
+    void orca.storage.set('bookmarks', bookmarks).catch(() => {})
+  }
+  for (const k of [...expanded]) if (matches(k)) expanded.delete(k)
+}
+
+function clearDropTargets(): void {
+  els.tree.classList.remove('drop-target')
+  els.tree.querySelectorAll('.row.drop-target').forEach((el) => el.classList.remove('drop-target'))
+}
+
+function canDropInto(fromKey: string, toFolder: string): boolean {
+  if (!fromKey || els.lock.checked) return false
+  if (fromKey === toFolder) return false
+  if (fromKey.endsWith('/') && toFolder.startsWith(fromKey)) return false
+  const norm = fromKey.replace(/\/$/, '')
+  const curParent = norm.includes('/') ? norm.slice(0, norm.lastIndexOf('/') + 1) : ''
+  return curParent !== toFolder
+}
+
+async function moveNode(fromKey: string, toFolder: string): Promise<void> {
+  if (!canDropInto(fromKey, toFolder)) return
+  await guard(async () => {
+    const { path } = await orca.plugin.request('note.move', { vault, from: fromKey, toFolder })
+    rewritePaths(fromKey, path)
+    if (toFolder) expanded.add(toFolder)
+    selected = path
+    saveState()
+    await refresh()
+  })
+}
+
 function node(n: NoteNode, depth: number): HTMLLIElement {
   const li = document.createElement('li')
   const row = document.createElement('div')
@@ -113,11 +171,36 @@ function node(n: NoteNode, depth: number): HTMLLIElement {
   // Orca's file-path type, and rejects it without a source host that matches its own.
   row.draggable = true
   row.addEventListener('dragstart', (e) => {
+    draggingKey = n.key
     const p = (vault + '/' + n.key.replace(/\/$/, '')).replace(/\//g, '\\')
+    e.dataTransfer?.setData('application/x-baalda-node', n.key)
     e.dataTransfer?.setData('text/x-orca-file-path', p)
     e.dataTransfer?.setData('application/x-orca-workspace-file-source', JSON.stringify({ version: 1, executionHostId: 'local', workspaceId: 'baalda' }))
     e.dataTransfer?.setData('text/plain', p)
   })
+  row.addEventListener('dragend', () => {
+    draggingKey = ''
+    clearDropTargets()
+  })
+  if (n.kind === 'folder') {
+    row.addEventListener('dragover', (e) => {
+      if (!canDropInto(draggingKey, n.key)) return
+      e.preventDefault()
+      e.stopPropagation()
+      clearDropTargets()
+      row.classList.add('drop-target')
+    })
+    row.addEventListener('dragleave', () => row.classList.remove('drop-target'))
+    row.addEventListener('drop', (e) => {
+      const fromKey = draggingKey || e.dataTransfer?.getData('application/x-baalda-node') || ''
+      if (!canDropInto(fromKey, n.key)) return
+      e.preventDefault()
+      e.stopPropagation()
+      clearDropTargets()
+      draggingKey = ''
+      void moveNode(fromKey, n.key)
+    })
+  }
   const open = expanded.has(n.key) || (query !== '' && n.kind === 'folder') // filtering shows every hit
   const icon =
     n.kind === 'folder'
@@ -169,12 +252,13 @@ function build(): void {
   els.status.textContent = !data.remote ? '로컬' : data.pending.length ? `대기 ${data.pending.length}` : ''
 }
 
-/** Buttons that act on the selected note. */
+/** Buttons that act on the selected note or folder. */
 function toolbar(): void {
-  const note = !!selected && !selected.endsWith('/') && !!data && !!find(data.items, selected)
-  // A locked vault takes no new notes, folders or deletes.
+  const hasSel = !!selected && !!data && !!find(data.items, selected)
+  // A locked vault takes no new notes, folders, renames or deletes.
   const locked = els.lock.checked
-  $<HTMLButtonElement>('delete').disabled = !note || locked
+  $<HTMLButtonElement>('rename').disabled = !hasSel || locked
+  $<HTMLButtonElement>('delete').disabled = !hasSel || locked
   $<HTMLButtonElement>('new-note').disabled = locked
   $<HTMLButtonElement>('new-folder').disabled = locked
   if (locked) els.create.hidden = true
@@ -281,6 +365,11 @@ document.addEventListener('keydown', (e) => {
     selected = row.dataset.key
     toggleBookmark()
   }
+  if (row?.dataset.key && e.key === 'F2') {
+    e.preventDefault()
+    selected = row.dataset.key
+    startRename()
+  }
   if (row?.dataset.key && e.key === 'Delete') {
     selected = row.dataset.key
     render()
@@ -385,13 +474,26 @@ $('collapse').addEventListener('click', () => {
 
 function startCreate(kind: 'note' | 'folder'): void {
   creating = kind
+  renamingPath = ''
   els.create.hidden = false
   els.name.value = ''
   els.name.placeholder = kind === 'note' ? '새 노트 이름' : '새 폴더 이름'
   els.name.focus()
 }
+function startRename(): void {
+  const n = data && find(data.items, selected)
+  if (!n || els.lock.checked) return
+  creating = 'rename'
+  renamingPath = n.key
+  els.create.hidden = false
+  els.name.value = n.label
+  els.name.placeholder = '새 이름'
+  els.name.focus()
+  els.name.select()
+}
 $('new-note').addEventListener('click', () => startCreate('note'))
 $('new-folder').addEventListener('click', () => startCreate('folder'))
+$('rename').addEventListener('click', startRename)
 els.name.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') els.create.hidden = true
 })
@@ -399,6 +501,18 @@ els.create.addEventListener('submit', (e) => {
   e.preventDefault()
   const name = els.name.value.trim()
   if (!name) return
+  if (creating === 'rename') {
+    const oldPath = renamingPath
+    void guard(async () => {
+      const { path } = await orca.plugin.request('note.rename', { vault, path: oldPath, name })
+      els.create.hidden = true
+      rewritePaths(oldPath, path)
+      selected = path
+      saveState()
+      await refresh()
+    })
+    return
+  }
   // Into the selected folder, or the selected note's folder.
   const folder = selected.endsWith('/') ? selected : selected.slice(0, selected.lastIndexOf('/') + 1)
   void guard(async () => {
@@ -410,11 +524,33 @@ els.create.addEventListener('submit', (e) => {
   })
 })
 
+// Allow dropping onto the tree background to move an item to the vault root.
+els.tree.addEventListener('dragover', (e) => {
+  if (!canDropInto(draggingKey, '')) return
+  e.preventDefault()
+  clearDropTargets()
+  els.tree.classList.add('drop-target')
+})
+els.tree.addEventListener('dragleave', (e) => {
+  if (e.target === els.tree) els.tree.classList.remove('drop-target')
+})
+els.tree.addEventListener('drop', (e) => {
+  const fromKey = draggingKey || e.dataTransfer?.getData('application/x-baalda-node') || ''
+  if (!canDropInto(fromKey, '')) return
+  e.preventDefault()
+  clearDropTargets()
+  draggingKey = ''
+  void moveNode(fromKey, '')
+})
+
 // Delete asks first in a <dialog>: the panel's sandbox may not allow confirm().
 function startDelete(): void {
   const n = data && find(data.items, selected)
-  if (!n || n.kind === 'folder' || els.lock.checked) return
-  $('confirm-text').textContent = `'${n.label}' 노트를 삭제할까요? (휴지통으로 이동)`
+  if (!n || els.lock.checked) return
+  $('confirm-text').textContent =
+    n.kind === 'folder'
+      ? `'${n.label}' 폴더와 안의 노트를 모두 삭제할까요? (휴지통으로 이동)`
+      : `'${n.label}' 노트를 삭제할까요? (휴지통으로 이동)`
   const dlg = $<HTMLDialogElement>('confirm')
   dlg.returnValue = ''
   dlg.showModal()
@@ -426,10 +562,7 @@ $('confirm').addEventListener('close', () => {
   const path = selected
   void guard(async () => {
     await orca.plugin.request('note.delete', { vault, path })
-    if (starred().includes(path)) {
-      bookmarks = { ...bookmarks, [vault]: starred().filter((k) => k !== path) }
-      void orca.storage.set('bookmarks', bookmarks).catch(() => {})
-    }
+    removePaths(path)
     selected = ''
     saveState()
     await refresh()
