@@ -4,9 +4,9 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import type { NoteNode, Sync, SyncState, Tree, Vault } from './protocol'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, join, resolve, sep } from 'node:path'
+import { basename, dirname, join, posix, resolve, sep } from 'node:path'
 import { readLevelDb, storageText } from './ldb'
 
 // Orca starts workers with a trimmed environment: derive the Windows dirs from the home folder.
@@ -212,7 +212,7 @@ async function folderPath(vault: string, rel: string): Promise<string> {
  * path with or without `.md`, then relative to the linking note, then the first document with
  * that name anywhere in the vault.
  */
-export async function resolveLink(vault: string, from: string, target: string): Promise<string | null> {
+export async function resolveLink(vault: string, from: string, target: string, all?: string[]): Promise<string | null> {
   const t = slash(target.split('#')[0]).replace(/^\.?\//, '').trim()
   if (!t) return null
   const dir = from.includes('/') ? from.slice(0, from.lastIndexOf('/') + 1) : ''
@@ -227,8 +227,69 @@ export async function resolveLink(vault: string, from: string, target: string): 
   }
   const name = (t.split('/').pop() ?? t).toLowerCase()
   const want = isDoc(name) ? [name] : [name + '.md', name + '.html']
-  const files = (await readdir(vault, { recursive: true })).map((f) => slash(String(f)))
+  const files = all ?? (await readdir(vault, { recursive: true })).map((f) => slash(String(f)))
   return files.find((f) => !f.split('/').some((p) => p.startsWith('.')) && want.includes((f.split('/').pop() ?? '').toLowerCase())) ?? null
+}
+
+/** Image files a note may show or receive, by extension. */
+const IMAGE: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' }
+const extOf = (p: string) => p.slice(p.lastIndexOf('.') + 1).toLowerCase()
+/** Pasted images land here (vault root); while empty it stays out of the tree. */
+const ATTACH = 'attachments'
+const MAX_IMAGE = 10 * 1024 * 1024
+
+/**
+ * Resolves an image `src` of note `from` to a vault-relative file: relative to the note, then to
+ * the vault, then by file name anywhere (`![[shot.png]]`). Never a dot folder (.context) or outside.
+ */
+export async function resolveImage(vault: string, from: string, src: string): Promise<string | null> {
+  const t = slash(src.split(/[?#]/)[0]).replace(/^\.?\//, '').trim()
+  if (!t || !IMAGE[extOf(t)]) return null
+  const dir = from.includes('/') ? from.slice(0, from.lastIndexOf('/') + 1) : ''
+  for (const base of [dir, '']) {
+    try {
+      const rel = slash(inside(vault, base + t).slice(vault.length + 1))
+      if (!hasDotSegment(rel) && (await stat(join(vault, rel)).catch(() => null))?.isFile()) return rel
+    } catch {
+      // escapes the vault: try the next candidate
+    }
+  }
+  const name = (t.split('/').pop() ?? t).toLowerCase()
+  const files = (await readdir(vault, { recursive: true })).map((f) => slash(String(f)))
+  return files.find((f) => !hasDotSegment(f) && IMAGE[extOf(f)] && (f.split('/').pop() ?? '').toLowerCase() === name) ?? null
+}
+
+const WIKILINK = /(!?)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g
+const MDLINK = /(!?)\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
+
+/** Documents of the vault that link to `path` ([[wikilinks]] and relative links; not images or web links). */
+// ponytail: reads every document per call and ignores code fences; add an index if vaults grow past a few thousand notes.
+export async function backlinks(vault: string, path: string): Promise<string[]> {
+  const files = (await readdir(vault, { recursive: true })).map((f) => slash(String(f))).filter((f) => !hasDotSegment(f))
+  const hits: string[] = []
+  for (const f of files) {
+    if (f === path || !isDoc(f)) continue
+    const text = await readFile(join(vault, f), 'utf8').catch(() => '')
+    const targets = [...text.matchAll(WIKILINK), ...text.matchAll(MDLINK)].flatMap((m) => {
+      let t = m[2]
+      if (m[0].includes('](')) {
+        if (/^([a-z][a-z0-9+.-]*:|#)/i.test(t)) return []
+        try {
+          t = decodeURIComponent(t)
+        } catch {
+          // not encoded: use as written
+        }
+      }
+      return IMAGE[extOf(t.split('#')[0])] ? [] : [t]
+    })
+    for (const t of new Set(targets)) {
+      if ((await resolveLink(vault, f, t, files)) === path) {
+        hits.push(f)
+        break
+      }
+    }
+  }
+  return hits.sort((a, b) => a.localeCompare(b))
 }
 
 async function walk(dir: string, rel: string, status: (rel: string) => Sync): Promise<NoteNode[]> {
@@ -240,6 +301,7 @@ async function walk(dir: string, rel: string, status: (rel: string) => Sync): Pr
     const r = rel + e.name
     if (e.isDirectory()) {
       const children = await walk(join(dir, e.name), r + '/', status)
+      if (rel === '' && e.name === ATTACH && !children.length) continue
       const sync: Sync = children.some((c) => c.sync === 'pending') ? 'pending' : status('')
       folders.push({ key: r + '/', label: e.name, kind: 'folder', sync, children })
     } else if (/\.md$/i.test(e.name)) {
@@ -550,6 +612,55 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('note.read', async ({ vault, path }) => {
     const v = await vaultDir(vault)
     return { text: await readFile(docFile(v, path), 'utf8'), locked: (await locks).has(v) }
+  })
+
+  orca.panels.handle('note.backlinks', async ({ vault, path }) => {
+    const v = await vaultDir(vault)
+    docFile(v, path)
+    return { paths: await backlinks(v, path) }
+  })
+
+  orca.panels.handle('note.image', async ({ vault, from, src }) => {
+    const v = await vaultDir(vault)
+    const rel = await resolveImage(v, from, src)
+    if (!rel) throw new Error(`이미지를 찾을 수 없습니다: ${src}`)
+    const file = join(v, rel)
+    // A link inside the vault may point outside it: check where the file really is.
+    if (!(await realpath(file)).startsWith((await realpath(v)) + sep)) throw new Error(`Path escapes the vault: ${src}`)
+    if ((await stat(file)).size > MAX_IMAGE) throw new Error(`이미지가 너무 큽니다: ${rel}`)
+    return { mime: IMAGE[extOf(rel)], data: (await readFile(file)).toString('base64') }
+  })
+
+  // Base64 parts of an image not saved yet, by vault.
+  const uploads = new Map<string, string>()
+  orca.panels.handle('note.attach', async ({ vault, from, mime, data, offset = 0, more = false }) => {
+    const v = await vaultDir(vault)
+    if ((await locks).has(v)) throw new Error('잠긴 볼트에는 이미지를 붙여넣을 수 없습니다.')
+    docFile(v, from)
+    const ext = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' } as Record<string, string>)[mime]
+    if (!ext) throw new Error(`지원하지 않는 이미지 형식입니다: ${mime}`)
+    const before = offset ? uploads.get(v) : ''
+    uploads.delete(v)
+    if (before?.length !== offset) throw new Error('Image parts arrived out of order; paste again')
+    const all = before + data
+    if (all.length > (MAX_IMAGE * 4) / 3 + 4) throw new Error('이미지가 너무 큽니다.')
+    if (more) {
+      uploads.set(v, all)
+      return { link: '' }
+    }
+    const dir = join(v, ATTACH)
+    await mkdir(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
+    for (let n = 0; ; n++) {
+      const name = `image-${stamp}${n ? '-' + n : ''}.${ext}`
+      try {
+        await writeFile(join(dir, name), Buffer.from(all, 'base64'), { flag: 'wx' })
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'EEXIST' && n < 100) continue
+        throw e
+      }
+      return { link: posix.relative(posix.dirname(slash(from)), `${ATTACH}/${name}`) }
+    }
   })
 
   // Shows a note in the single Baalda tab of the active workspace: point that workspace's view

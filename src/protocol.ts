@@ -39,6 +39,22 @@ declare module 'orca' {
     'note.open': { input: { vault: string; path: string }; output: { ok: true } }
     /** Follows a [[wikilink]] or relative link from note `from`; answers the path it opened. */
     'note.goto': { input: { vault: string; from: string; target: string }; output: { path: string } }
+    /** Notes (documents) that link to `path` with a [[wikilink]] or a relative link, sorted. */
+    'note.backlinks': { input: { vault: string; path: string }; output: { paths: string[] } }
+    /**
+     * Reads an image a note shows (`src` as written in it: a relative path or a bare [[file name]])
+     * as base64. Only image files inside the vault (no dot folders) are answered.
+     */
+    'note.image': { input: { vault: string; from: string; src: string }; output: { mime: string; data: string } }
+    /**
+     * Saves a pasted image under the vault's `attachments/` folder (refused in a locked vault) and
+     * answers the link to it relative to note `from`. Sent in base64 parts like note.write:
+     * `offset` counts the base64 characters sent before; `link` is '' until the last part.
+     */
+    'note.attach': {
+      input: { vault: string; from: string; mime: string; data: string; offset?: number; more?: boolean }
+      output: { link: string }
+    }
     'note.read': { input: { vault: string; path: string }; output: { text: string; locked: boolean } }
     /**
      * Orca caps a frame's request at 65,560 UTF-8 bytes, so the editor sends long notes in parts:

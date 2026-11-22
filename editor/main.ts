@@ -3,7 +3,8 @@
 // syncs the note from disk.
 import { marked } from './vendor/marked.js'
 import { GROUPS } from './vendor/emoji.js'
-import type {} from '../src/protocol'
+import type { NoteNode } from '../src/protocol'
+import { continueList, indentLines, pickNotes, wikiQuery, type Edit } from './text'
 
 const title = document.getElementById('title') as HTMLElement
 const backBtn = document.getElementById('back') as HTMLButtonElement
@@ -62,11 +63,19 @@ const escape = (s: string) =>
 
 /** Marks a [[wikilink]] turned into a Markdown link; the target follows, URI-encoded. */
 const WIKI = '#wikilink:'
+const IMG = /\.(png|jpe?g|gif|webp|bmp)$/i
 
 // Notes can come from teammates: never render their raw HTML or script URLs.
 marked.use({
   renderer: {
     html: (t: { text: string }) => escape(t.text),
+    // Web images load as is; a vault image waits for the worker to read it (see hydrateImages).
+    image: (t: { href: string; text: string }) =>
+      /^https?:/i.test(t.href)
+        ? `<img src="${escape(t.href)}" alt="${escape(t.text)}">`
+        : /^([a-z][a-z0-9+.-]*:|#)/i.test(t.href)
+          ? escape(t.text)
+          : `<img data-src="${escape(t.href)}" alt="${escape(t.text)}">`,
     // A link token's `text` is raw source: render its inline tokens so nested HTML stays escaped.
     link(this: { parser: { parseInline(tokens: unknown[]): string } }, t: { href: string; tokens: unknown[] }) {
       const text = this.parser.parseInline(t.tokens)
@@ -87,8 +96,11 @@ export function render(md: string): string {
     body = md.slice(fm[0].length)
   }
   // [[Note]] / [[folder/Note|alias]] -> a link the click handler follows through the worker.
-  body = body.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, name: string, alias?: string) =>
-    `[${(alias ?? name).replace(/[[\]]/g, '')}](${WIKI}${encodeURIComponent(name.trim())})`
+  // ![[shot.png]] -> an image the worker reads.
+  body = body.replace(/(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, bang: string, name: string, alias?: string) =>
+    bang && IMG.test(name.trim())
+      ? `![${(name.trim().split('/').pop() ?? '').replace(/[[\]]/g, '')}](${encodeURIComponent(name.trim())})`
+      : `[${(alias ?? name).replace(/[[\]]/g, '')}](${WIKI}${encodeURIComponent(name.trim())})`
   )
   return props + (body.trim() ? (marked.parse(body, { async: false }) as string) : '<p class="empty">빈 노트</p>')
 }
@@ -214,9 +226,78 @@ function show(): void {
       pre.replaceWith(wrap)
       wrap.append(pre, b)
     }
+    hydrateImages(target)
   }
   if (!find.hidden) step(0)
 }
+
+/** Vault images already read, by note and src; cleared when another note opens. */
+const images = new Map<string, string>()
+function hydrateImages(t: Target): void {
+  for (const img of Array.from(view.querySelectorAll<HTMLImageElement>('img[data-src]'))) {
+    let src = img.dataset.src ?? ''
+    try {
+      src = decodeURIComponent(src)
+    } catch {
+      // not encoded: use as written
+    }
+    const key = t.path + '\0' + src
+    const hit = images.get(key)
+    if (hit) {
+      img.src = hit
+      continue
+    }
+    void orca.plugin
+      .request('note.image', { vault: t.vault, from: t.path, src })
+      .then((r) => {
+        const url = `data:${r.mime};base64,${r.data}`
+        images.set(key, url)
+        if (img.isConnected) img.src = url
+      })
+      .catch(() => (img.alt = `이미지를 불러올 수 없습니다: ${src}`))
+  }
+}
+
+// Backlinks: notes that link to this one, in a collapsible area under the note.
+const bl = document.getElementById('backlinks') as HTMLDetailsElement
+const blList = document.getElementById('bl-list') as HTMLElement
+const blCount = document.getElementById('bl-count') as HTMLElement
+let blRun = 0
+function loadBacklinks(): void {
+  const t = target
+  const mine = ++blRun
+  if (!t) {
+    bl.hidden = true
+    return
+  }
+  void orca.plugin
+    .request('note.backlinks', t)
+    .then(({ paths }) => {
+      if (mine !== blRun) return
+      bl.hidden = false
+      blCount.textContent = `(${paths.length})`
+      blList.replaceChildren(
+        ...paths.map((p) => {
+          const b = Object.assign(document.createElement('button'), { textContent: p.replace(/\.(md|html?)$/i, ''), title: p })
+          b.dataset.path = p
+          const li = document.createElement('li')
+          li.append(b)
+          return li
+        })
+      )
+    })
+    .catch(() => {
+      if (mine === blRun) bl.hidden = true
+    })
+}
+blList.addEventListener('click', (e) => {
+  const path = (e.target as HTMLElement).closest('button')?.dataset.path
+  if (!path || !target) return
+  state.textContent = ''
+  void orca.plugin
+    .request('note.open', { vault: target.vault, path })
+    .catch((err: unknown) => (state.textContent = err instanceof Error ? err.message : String(err)))
+})
 
 // Ctrl+F: find in the note. The view highlights hits without touching the DOM; the editor selects them.
 const find = document.getElementById('find') as HTMLElement
@@ -438,6 +519,10 @@ async function load(next: Target | null): Promise<void> {
   await save() // never drop edits to the previous note
   const read = next ? await orca.plugin.request('note.read', next) : { text: '', locked: false }
   if (mine !== loads) return // a later click won while this read was in flight
+  if (!sameTarget(next, target)) {
+    images.clear()
+    wikiKeys = null
+  }
   target = next
   text = read.text
   lastSavedText = read.text
@@ -448,6 +533,7 @@ async function load(next: Target | null): Promise<void> {
   state.textContent = ''
   if (editing) source.value = text
   show()
+  loadBacklinks()
 }
 
 document.getElementById('conflict-reload')!.addEventListener('click', () => {
@@ -464,7 +550,7 @@ document.getElementById('conflict-keep')!.addEventListener('click', () => {
 /** Replaces the selection through the editing command, so Ctrl+Z undoes it and `input` autosaves. */
 function insert(t: string): void {
   source.focus()
-  if (!document.execCommand('insertText', false, t)) {
+  if (!(t ? document.execCommand('insertText', false, t) : document.execCommand('delete'))) {
     source.setRangeText(t, source.selectionStart, source.selectionEnd, 'end')
     source.dispatchEvent(new Event('input'))
   }
@@ -661,6 +747,141 @@ source.addEventListener('input', () => {
   state.textContent = '수정됨'
   clearTimeout(timer)
   timer = setTimeout(() => void save(), 800) // autosave: the tab's own file is only the pointer
+  void updateWiki()
+})
+
+function apply(ed: Edit): void {
+  source.setSelectionRange(ed.from, ed.to)
+  insert(ed.text)
+  if (ed.sel) source.setSelectionRange(...ed.sel)
+}
+
+// [[ autocomplete: a popup under the toolbar lists vault notes; picking one writes [[path]].
+const wiki = document.getElementById('wiki') as HTMLElement
+let wikiKeys: string[] | null = null
+let wikiHits: string[] = []
+let wikiAt = 0
+let wikiFrom = 0
+
+async function noteKeys(t: Target): Promise<string[]> {
+  if (wikiKeys) return wikiKeys
+  const flat = (ns: NoteNode[]): string[] => ns.flatMap((n) => (n.kind === 'folder' ? flat(n.children ?? []) : [n.key]))
+  return (wikiKeys = flat((await orca.plugin.request('notes.tree', { vault: t.vault })).items))
+}
+
+function closeWiki(): void {
+  wiki.hidden = true
+}
+
+function paintWiki(): void {
+  wiki.replaceChildren(
+    ...wikiHits.map((k, i) => {
+      const b = document.createElement('button')
+      b.className = i === wikiAt ? 'on' : ''
+      b.dataset.i = String(i)
+      const dir = k.includes('/') ? k.slice(0, k.lastIndexOf('/')) : ''
+      b.append((k.split('/').pop() ?? k).replace(/\.(md|html?)$/i, ''))
+      if (dir) b.append(Object.assign(document.createElement('small'), { textContent: dir }))
+      return b
+    })
+  )
+  wiki.querySelector('.on')?.scrollIntoView({ block: 'nearest' })
+}
+
+async function updateWiki(): Promise<void> {
+  const t = target
+  if (!t || !editing || source.selectionStart !== source.selectionEnd || !wikiQuery(source.value, source.selectionStart)) return closeWiki()
+  const keys = await noteKeys(t).catch(() => [] as string[])
+  const q = source.selectionStart === source.selectionEnd && wikiQuery(source.value, source.selectionStart) // typing went on while the list loaded
+  wikiHits = q ? pickNotes(keys, q.q) : []
+  if (!q || !wikiHits.length) return closeWiki()
+  wikiFrom = q.start
+  wikiAt = 0
+  paintWiki()
+  wiki.style.top = `${tools.getBoundingClientRect().bottom + 4}px`
+  wiki.style.left = '32px'
+  wiki.hidden = false
+}
+
+function acceptWiki(i: number): void {
+  const key = wikiHits[i]
+  if (!key) return
+  const caret = source.selectionStart
+  source.setSelectionRange(wikiFrom, source.value.startsWith(']]', caret) ? caret + 2 : caret)
+  insert(`[[${key.replace(/\.md$/i, '')}]]`)
+  closeWiki()
+}
+
+wiki.addEventListener('mousedown', (e) => e.preventDefault()) // keep the textarea's caret
+wiki.addEventListener('click', (e) => {
+  const i = (e.target as HTMLElement).closest('button')?.dataset.i
+  if (i !== undefined) acceptWiki(Number(i))
+})
+source.addEventListener('blur', closeWiki)
+
+source.addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return // Korean IME: Enter/Tab belong to the composition
+  if (!wiki.hidden) {
+    const n = wikiHits.length
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      wikiAt = (wikiAt + (e.key === 'ArrowDown' ? 1 : n - 1)) % n
+      return paintWiki()
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      return acceptWiki(wikiAt)
+    }
+    if (e.key === 'Escape') e.preventDefault()
+    if (e.key.length > 1 && !['Shift', 'Backspace'].includes(e.key)) closeWiki()
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return
+  if (e.key === 'Tab') {
+    e.preventDefault()
+    apply(indentLines(source.value, source.selectionStart, source.selectionEnd, e.shiftKey))
+  } else if (e.key === 'Enter' && !e.shiftKey && source.selectionStart === source.selectionEnd) {
+    const ed = continueList(source.value, source.selectionStart)
+    if (ed) {
+      e.preventDefault()
+      apply(ed)
+    }
+  }
+})
+
+// Ctrl+V with an image on the clipboard: save it in the vault and link it. (Text pastes as usual.)
+const PIECE = 36_000 // raw bytes per request: a multiple of 3, so the base64 parts join cleanly
+const b64 = (blob: Blob) =>
+  new Promise<string>((done, fail) => {
+    const r = new FileReader()
+    r.onload = () => done(String(r.result).split(',')[1] ?? '')
+    r.onerror = () => fail(r.error)
+    r.readAsDataURL(blob)
+  })
+
+async function pasteImage(file: File, t: Target): Promise<void> {
+  state.textContent = '이미지 저장 중…'
+  try {
+    let link = ''
+    for (let at = 0, sent = 0; at < file.size; at += PIECE) {
+      const data = await b64(file.slice(at, at + PIECE))
+      link = (await orca.plugin.request('note.attach', { vault: t.vault, from: t.path, mime: file.type, data, offset: sent, more: at + PIECE < file.size })).link
+      sent += data.length
+    }
+    if (link && editing && sameTarget(target, t)) insert(`![](${link})`)
+    state.textContent = link ? '이미지 추가됨' : ''
+  } catch (e) {
+    state.textContent = '이미지 저장 실패: ' + (e instanceof Error ? e.message : String(e))
+  }
+}
+
+source.addEventListener('paste', (e) => {
+  const cb = e.clipboardData
+  if (!cb || !target || Array.from(cb.types).includes('text/plain')) return
+  const file = Array.from(cb.items).find((i) => i.kind === 'file' && /^image\/(png|jpeg|gif|webp)$/.test(i.type))?.getAsFile()
+  if (!file) return
+  e.preventDefault()
+  if (locked) state.textContent = '잠긴 볼트에는 이미지를 붙여넣을 수 없습니다'
+  else void pasteImage(file, target)
 })
 document.addEventListener('keydown', (e) => {
   if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -697,6 +918,8 @@ orca.plugin.on('vault.locked', (p) => {
 // The note changed on disk (Baalda sync, another editor): reload in view mode, or warn if editing.
 orca.plugin.on('notes.changed', () => {
   if (!target) return
+  wikiKeys = null
+  if (!editing) loadBacklinks() // while editing, each autosave would rescan the vault
   if (!dirty && !editing) {
     void load(target).catch(() => (state.textContent = '노트가 삭제되었거나 읽을 수 없습니다'))
     return

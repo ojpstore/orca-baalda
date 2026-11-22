@@ -123,6 +123,51 @@ test('renames and moves notes and folders safely within the vault', async () => 
   await worker.deactivate()
 })
 
+test('backlinks list notes linking here; images are read only from inside the vault', async () => {
+  const { root, vault } = fixture()
+  writeFileSync(join(vault, 'L1.md'), 'see [[Concepts/A]] and [[Welcome|w]]')
+  writeFileSync(join(vault, 'Concepts', 'L2.md'), '[a](A.md) [web](https://x.com/A.md) ![[shot.png]]')
+  writeFileSync(join(vault, 'None.md'), '[[Missing]] ![](A.png)')
+  assert.deepEqual(await main.backlinks(vault, 'Concepts/A.md'), ['Concepts/L2.md', 'L1.md'])
+  assert.deepEqual(await main.backlinks(vault, 'Welcome.md'), ['L1.md'])
+
+  mkdirSync(join(vault, 'img'))
+  writeFileSync(join(vault, 'img', 'shot.png'), Buffer.from([1, 2, 3]))
+  writeFileSync(join(vault, '.context', 'secret.png'), 'x')
+  writeFileSync(join(root, 'out.png'), 'x')
+  assert.equal(await main.resolveImage(vault, 'Concepts/L2.md', 'shot.png'), 'img/shot.png') // by name
+  assert.equal(await main.resolveImage(vault, 'Concepts/L2.md', '../img/shot.png'), 'img/shot.png') // relative
+  assert.equal(await main.resolveImage(vault, 'Welcome.md', '../out.png'), null) // outside the vault
+  assert.equal(await main.resolveImage(vault, 'Welcome.md', '.context/secret.png'), null)
+  assert.equal(await main.resolveImage(vault, 'Welcome.md', 'Welcome.md'), null) // not an image
+
+  const worker = await mountWorker(main, { host: mockHost() })
+  const img = await worker.request('note.image', { vault, from: 'Welcome.md', src: 'img/shot.png' })
+  assert.deepEqual([img.mime, img.data], ['image/png', 'AQID'])
+  await assert.rejects(worker.request('note.image', { vault, from: 'Welcome.md', src: '../out.png' }))
+  assert.deepEqual((await worker.request('note.backlinks', { vault, path: 'Welcome.md' })).paths, ['L1.md'])
+  await assert.rejects(worker.request('note.backlinks', { vault, path: '../x.md' }))
+  await worker.deactivate()
+})
+
+test('pasted images are saved in parts under attachments/, never in a locked vault', async () => {
+  const { vault } = fixture()
+  const worker = await mountWorker(main, { host: mockHost() })
+  const png = Buffer.from('0123456789ab').toString('base64') // 16 chars
+  const a = { vault, from: 'Concepts/A.md', mime: 'image/png' }
+  assert.equal((await worker.request('note.attach', { ...a, data: png.slice(0, 8), more: true })).link, '')
+  const { link } = await worker.request('note.attach', { ...a, data: png.slice(8), offset: 8 })
+  assert.match(link, /^\.\.\/attachments\/image-\d+\.png$/)
+  assert.equal(readFileSync(join(vault, 'attachments', link.slice('../attachments/'.length)), 'utf8'), '0123456789ab')
+  assert.match((await worker.request('note.attach', { ...a, from: 'Welcome.md', data: png })).link, /^attachments\/image-/)
+  await assert.rejects(worker.request('note.attach', { ...a, data: png, offset: 4 })) // out of order
+  await assert.rejects(worker.request('note.attach', { ...a, mime: 'text/html', data: png }))
+  await assert.rejects(worker.request('note.attach', { ...a, from: '../x.md', data: png }))
+  await worker.request('vault.lock', { vault, locked: true })
+  await assert.rejects(worker.request('note.attach', { ...a, data: png }))
+  await worker.deactivate()
+})
+
 test('searches note text, case-insensitive, skipping dot folders', async () => {
   const { vault } = fixture()
   writeFileSync(join(vault, '.context', 'x.md'), 'dash')

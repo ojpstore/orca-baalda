@@ -143,6 +143,16 @@
       ::highlight(find) { background: rgb(255 200 0 / 0.35); }
       ::highlight(find-now) { background: rgb(255 140 0 / 0.85); color: #000; }
       #view.tts .copy, #view.tts .props, #view.tts pre { display: none; }
+      #view img { max-width: 100%; }
+      #wiki { position: fixed; z-index: 10; width: 360px; max-width: calc(100vw - 16px); max-height: 260px; overflow-y: auto; border: 1px solid var(--orca-border); border-radius: 8px; background: var(--orca-popover, var(--orca-card)); box-shadow: 0 8px 28px rgb(0 0 0 / 0.35); }
+      #wiki button { display: block; width: 100%; padding: 5px 10px; border: 0; background: none; color: var(--orca-foreground); font: 13px system-ui, sans-serif; text-align: left; cursor: pointer; }
+      #wiki button.on, #wiki button:hover { background: var(--orca-muted); }
+      #wiki small { margin-left: 8px; color: var(--orca-muted-foreground); }
+      #backlinks { border-top: 1px solid var(--orca-border); font-size: 13px; }
+      #backlinks summary { padding: 6px 12px; cursor: pointer; color: var(--orca-muted-foreground); }
+      #backlinks ul { max-height: 30vh; overflow-y: auto; margin: 0; padding: 0 12px 8px 32px; }
+      #backlinks li button { padding: 2px 0; border: 0; background: none; color: var(--orca-primary); font: inherit; cursor: pointer; }
+      #backlinks li button:hover { text-decoration: underline; }
       [hidden] { display: none !important; }
     </style>
   </head>
@@ -182,7 +192,9 @@
       <iframe id="page" title="페이지" sandbox="allow-scripts allow-popups" hidden></iframe>
       <textarea id="source" aria-label="노트 내용" spellcheck="false" hidden></textarea>
     </main>
-    <button id="top" title="맨 위로" aria-label="맨 위로" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+    <div id="wiki" role="listbox" aria-label="노트 자동완성" hidden></div>
+    <details id="backlinks" hidden><summary>백링크 <span id="bl-count"></span></summary><ul id="bl-list"></ul></details>
+    <button id="top"title="맨 위로" aria-label="맨 위로" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>
